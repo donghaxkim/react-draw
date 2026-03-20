@@ -2,6 +2,7 @@
 import type { ToolEventHandler } from "../interaction.js";
 import { getShadowRoot } from "../toolbar.js";
 import { resolveComponentAtPoint } from "./resolve-helper.js";
+import { COLORS } from "../design-tokens.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -25,10 +26,9 @@ export const lassoHandler: ToolEventHandler = {
       "position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;"
     );
     lassoPath = document.createElementNS(SVG_NS, "path");
-    lassoPath.setAttribute("stroke", "#42a5f5");
-    lassoPath.setAttribute("stroke-width", "2");
-    lassoPath.setAttribute("stroke-dasharray", "4,4");
-    lassoPath.setAttribute("fill", "rgba(66,165,245,0.1)");
+    lassoPath.setAttribute("stroke", COLORS.accent);
+    lassoPath.setAttribute("stroke-width", "1.5");
+    lassoPath.setAttribute("fill", COLORS.accentSoft);
     lassoSvg.appendChild(lassoPath);
     shadowRoot.appendChild(lassoSvg);
   },
@@ -118,7 +118,7 @@ function showSelectionBorder(rect: DOMRect): void {
     top: ${rect.top}px;
     width: ${rect.width}px;
     height: ${rect.height}px;
-    border: 2px solid #42a5f5;
+    border: 1.5px solid ${COLORS.accent};
     pointer-events: none;
     z-index: 2147483645;
   `;
@@ -140,6 +140,3 @@ export function clearLassoSelection(): void {
   selectedElements = [];
 }
 
-export function getLassoSelectedElements(): HTMLElement[] {
-  return selectedElements;
-}

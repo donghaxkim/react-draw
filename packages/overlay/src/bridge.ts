@@ -82,10 +82,6 @@ export function disconnect(): void {
   messageHandlers = [];
 }
 
-export function isConnected(): boolean {
-  return ws !== null && ws.readyState === WebSocket.OPEN;
-}
-
 export function setOnMaxRetries(callback: () => void): void {
   onMaxRetriesExhausted = callback;
 }
