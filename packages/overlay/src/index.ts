@@ -1,7 +1,7 @@
 // packages/overlay/src/index.ts
 import { connect, disconnect } from "./bridge.js";
 import { mountToolbar, destroyToolbar, updateModeLabel, setOnEyeToggle, setOnGenerate, setOnCanvasUndo, updateEyeButton, updateGenerateButton, showToast } from "./toolbar.js";
-import { initSelection, deactivateSelection } from "./selection.js";
+import { initSelection, deactivateSelection, setOnSelectCallback } from "./selection.js";
 import { initDrag, deactivateDrag } from "./drag.js";
 import { initAnnotationLayer, destroyAnnotationLayer, clearAnnotationLayer, removeAnnotationElement } from "./annotation-layer.js";
 import { initGhostLayer, destroyGhostLayer } from "./ghost-layer.js";
@@ -57,6 +57,11 @@ function init(): void {
   initGhostLayer();
   initToolsPanel();
   initInteraction();
+
+  // When a component is selected (in Pointer mode), check if Move was waiting
+  setOnSelectCallback(() => {
+    returnToMoveAfterSelect();
+  });
 
   // Register tool handlers with interaction layer
   registerToolHandler("grab", grabHandler);

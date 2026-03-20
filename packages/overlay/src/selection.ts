@@ -371,6 +371,9 @@ async function selectElement(el: HTMLElement): Promise<void> {
       ? `${compPart}${locPart}`
       : `${tagPart} in ${compPart}${locPart}`;
     updateComponentInfo(display);
+
+    // Notify listeners (e.g., Move tool's pending-select flow)
+    if (onSelectCallback) onSelectCallback();
   } catch (err) {
     console.error("[SketchUI] selectElement error:", err);
   }
@@ -553,4 +556,34 @@ export function setEnabled(enabled: boolean): void {
 
 export function getSelectedElement(): HTMLElement | null {
   return selectedElement ?? null;
+}
+
+// --- Hover highlight helpers (used by Move tool) ---
+
+export function showHoverHighlightAt(clientX: number, clientY: number): void {
+  const el = document.elementFromPoint(clientX, clientY) as HTMLElement;
+  if (!el || el.closest("#sketch-ui-root") || el.hasAttribute("data-sketch-ui-ghost") || el.hasAttribute("data-sketch-ui-interaction")) {
+    hideHoverHighlightExport();
+    return;
+  }
+  const rect = el.getBoundingClientRect();
+  if (hoverOverlay) {
+    hoverOverlay.style.display = "block";
+    hoverOverlay.style.left = `${rect.left}px`;
+    hoverOverlay.style.top = `${rect.top}px`;
+    hoverOverlay.style.width = `${rect.width}px`;
+    hoverOverlay.style.height = `${rect.height}px`;
+  }
+}
+
+export function hideHoverHighlightExport(): void {
+  hideHoverOverlay();
+}
+
+// --- Selection callback (used by Move tool's pending-select flow) ---
+
+let onSelectCallback: (() => void) | null = null;
+
+export function setOnSelectCallback(fn: (() => void) | null): void {
+  onSelectCallback = fn;
 }

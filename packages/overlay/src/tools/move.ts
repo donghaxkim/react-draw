@@ -1,6 +1,6 @@
 // packages/overlay/src/tools/move.ts
 import type { ToolEventHandler } from "../interaction.js";
-import { getSelection, getSelectedElement } from "../selection.js";
+import { getSelection, getSelectedElement, showHoverHighlightAt, hideHoverHighlightExport, clearSelection } from "../selection.js";
 import { setActiveTool, getGhosts, moveGhost } from "../canvas-state.js";
 import { createGhost, updateGhostPosition, findGhostAtPoint } from "../ghost-layer.js";
 import type { GhostEntry } from "../canvas-state.js";
@@ -12,6 +12,8 @@ let pendingSelect = false;
 
 export const moveHandler: ToolEventHandler = {
   onMouseDown(e: MouseEvent) {
+    hideHoverHighlightExport();
+
     // Check if clicking an existing ghost
     const existingGhost = findGhostAtPoint(e.clientX, e.clientY);
     if (existingGhost) {
@@ -52,16 +54,23 @@ export const moveHandler: ToolEventHandler = {
   },
 
   onMouseMove(e: MouseEvent) {
-    if (!isDragging || !dragTarget) return;
-    const pageX = e.clientX + window.scrollX - dragOffset.x;
-    const pageY = e.clientY + window.scrollY - dragOffset.y;
-    updateGhostPosition(dragTarget.id, pageX, pageY);
+    if (isDragging && dragTarget) {
+      const pageX = e.clientX + window.scrollX - dragOffset.x;
+      const pageY = e.clientY + window.scrollY - dragOffset.y;
+      updateGhostPosition(dragTarget.id, pageX, pageY);
+      return;
+    }
+
+    // Show hover highlights when not dragging (so user can see what they'd move)
+    showHoverHighlightAt(e.clientX, e.clientY);
   },
 
   onMouseUp(_e: MouseEvent) {
     if (isDragging && dragTarget) {
       // Position already updated — ghost stays where it is
       moveGhost(dragTarget.id, dragTarget.currentPos);
+      // Clear selection so next click picks a new component
+      clearSelection();
     }
     dragTarget = null;
     isDragging = false;

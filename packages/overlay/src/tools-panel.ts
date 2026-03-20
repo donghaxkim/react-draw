@@ -3,14 +3,25 @@ import type { ToolType } from "@sketch-ui/shared";
 import { getActiveTool, setActiveTool, getToolOptions, setToolOption } from "./canvas-state.js";
 import { getShadowRoot } from "./toolbar.js";
 
+// Inline SVG icons (18x18, stroke-based, matching react-icons style)
+const ICONS = {
+  pointer: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="M13 13l6 6"/></svg>`,
+  grab: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0v1"/><path d="M14 10V4a2 2 0 0 0-4 0v2"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>`,
+  move: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg>`,
+  draw: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>`,
+  color: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>`,
+  text: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>`,
+  lasso: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 22a5 5 0 0 1-2-4"/><path d="M7 16.93c.96.43 1.96.74 2.99.91"/><path d="M3.34 14A6.8 6.8 0 0 1 2 10c0-4.42 4.48-8 10-8s10 3.58 10 8-4.48 8-10 8a12 12 0 0 1-3-.38"/><path d="M5 18a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>`,
+} as const;
+
 const TOOL_DEFS: Array<{ type: ToolType; icon: string; label: string; shortcut: string }> = [
-  { type: "pointer", icon: "↖", label: "Pointer", shortcut: "V" },
-  { type: "grab", icon: "✋", label: "Grab", shortcut: "H" },
-  { type: "move", icon: "⇔", label: "Move", shortcut: "M" },
-  { type: "draw", icon: "✏", label: "Draw", shortcut: "D" },
-  { type: "color", icon: "💧", label: "Color", shortcut: "C" },
-  { type: "text", icon: "T", label: "Text", shortcut: "T" },
-  { type: "lasso", icon: "⭕", label: "Lasso", shortcut: "L" },
+  { type: "pointer", icon: ICONS.pointer, label: "Pointer", shortcut: "V" },
+  { type: "grab", icon: ICONS.grab, label: "Grab", shortcut: "H" },
+  { type: "move", icon: ICONS.move, label: "Move", shortcut: "M" },
+  { type: "draw", icon: ICONS.draw, label: "Draw", shortcut: "D" },
+  { type: "color", icon: ICONS.color, label: "Color", shortcut: "C" },
+  { type: "text", icon: ICONS.text, label: "Text", shortcut: "T" },
+  { type: "lasso", icon: ICONS.lasso, label: "Lasso", shortcut: "L" },
 ];
 
 const PANEL_STYLES = `
@@ -45,6 +56,11 @@ const PANEL_STYLES = `
     cursor: pointer;
     border-radius: 4px;
     position: relative;
+  }
+  .tool-btn svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
   }
   .tool-btn:hover {
     background: #2a2a3e;
