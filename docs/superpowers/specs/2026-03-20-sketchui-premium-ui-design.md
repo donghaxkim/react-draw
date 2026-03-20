@@ -222,8 +222,9 @@ Separate small floating card that appears between the last tool button and the C
 
 Floats near the selected element, not in the action bar.
 
-- Position: 8px above the selected element's top edge
-- If the element's top edge minus the label height (~28px) minus 8px is less than 0, flips to 8px below the element's bottom edge
+- Position: 8px above the selected element's top edge, left-aligned to the element's left edge
+- **Vertical flip:** If the element's top edge minus the label height (~28px) minus 8px is less than 0, flips to 8px below the element's bottom edge
+- **Horizontal clamping:** If the label would overflow the right edge of the viewport, cap at `right: 8px` from viewport edge. Always left-align to the element's left edge as default anchor.
 - Background: `--bg-primary`, border: `1px solid --border`, shadow: `--shadow-sm`, border-radius: `6px`
 - Padding: `4px 8px`
 - Content:
@@ -257,7 +258,7 @@ Custom SVG cursors encoded as `data:image/svg+xml` URIs.
 | Pointer | System default arrow | No change |
 | Grab | System `grab` / `grabbing` | No change |
 | Move | Custom crosshair with move arrows | 24x24 SVG, `--accent` colored |
-| Draw | Circle matching brush size | Dynamic radius (2/4/8px), `--accent` outline. Updates live when brush size changes. |
+| Draw | Circle matching brush size | Dynamic radius (2/4/8px), `--accent` outline. Cursor SVG data URI is generated once when brush size changes (in the sub-options click handler), not on every mousemove. The current cursor URI string is cached and only regenerated when the size value actually changes. This prevents cursor flicker. |
 | Color | Custom eyedropper | 24x24 SVG |
 | Text | System `text` | No change |
 | Lasso | Small crosshair dot | 16x16 SVG, thin `--accent` cross |
@@ -350,15 +351,11 @@ When user presses a tool shortcut key:
 
 ## Font Loading
 
-Inter font is loaded by injecting a `<link>` tag into the page `<head>`:
+Inter font is bundled as a base64-encoded `@font-face` declaration inside the Shadow DOM styles. This adds ~40KB to the overlay bundle but guarantees visual consistency regardless of network conditions (developers often work offline — airplane, bad wifi). No external Google Fonts dependency.
 
-```html
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
-```
+The `@font-face` block is included in the shared style sheet injected into Shadow DOM during initialization. It declares `Inter` at weights 400 and 600 using `woff2` format (best compression). All overlay text uses `font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`.
 
-Injected once during overlay initialization. The `display=swap` ensures text renders immediately with the fallback font, then swaps to Inter once loaded. All overlay text uses `font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`.
-
-Since the overlay runs inside Shadow DOM, the font-family declaration must be set on the Shadow DOM host and all child elements explicitly (Shadow DOM does not inherit `@font-face` from the outer document in all browsers, but the `<link>` in `<head>` makes the font available globally for any element that references it by name).
+The base64 font data is stored in `design-tokens.ts` alongside other token constants, keeping the font co-located with the design system.
 
 ---
 
