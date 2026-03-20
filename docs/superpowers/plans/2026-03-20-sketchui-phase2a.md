@@ -33,7 +33,8 @@
 | `packages/overlay/src/tools/color.ts` | Color tool (picker, inline style override) |
 | `packages/overlay/src/tools/text.ts` | Text tool (input → foreignObject) |
 | `packages/overlay/src/tools/lasso.ts` | Lasso tool (freehand multi-select) |
-| `packages/overlay/src/tools/resolve-helper.ts` | Component resolution helper for tool handlers |
+| `packages/overlay/src/tools/resolve-helper.ts` | Async component resolution helper for tool handlers |
+| `packages/overlay/src/utils/component-filter.ts` | Shared internal-component skip list and `isInternalName()` |
 | `packages/overlay/src/utils/rdp.ts` | Ramer-Douglas-Peucker point simplification |
 | `packages/overlay/src/__tests__/rdp.test.ts` | Unit test for RDP algorithm |
 
@@ -42,7 +43,7 @@
 | File | Changes |
 |------|---------|
 | `packages/shared/src/types.ts` | Add new types (ComponentRef, ToolType, annotations, etc.) |
-| `packages/overlay/src/selection.ts` | Add `setEnabled(boolean)` export that removes/re-attaches capture-phase listeners |
+| `packages/overlay/src/selection.ts` | Add `setEnabled(boolean)` + `getSelectedElement()` exports; import `isInternalName` from shared utility |
 | `packages/overlay/src/toolbar.ts` | Rename Undo → "Undo Reorder", add Eye toggle + Generate button, add toast display |
 | `packages/overlay/src/index.ts` | Wire up tools panel, canvas state, layers, interaction |
 | `packages/overlay/package.json` | No new deps needed (all browser APIs) |
@@ -885,16 +886,61 @@ git commit -m "feat(overlay): add ghost layer — DOM clone creation, positionin
 
 ---
 
-### Task 6: Modify selection.ts — Add setEnabled()
+### Task 6: Extract Component Filter + Modify selection.ts
 
 **Files:**
+- Create: `packages/overlay/src/utils/component-filter.ts`
 - Modify: `packages/overlay/src/selection.ts`
 
-- [ ] **Step 1: Add setEnabled export**
+- [ ] **Step 1: Create component-filter.ts**
 
-In `selection.ts`, add this new export function after the existing `deactivateSelection()` function (around line 536). Also add a variable to track whether listeners are currently attached:
+Extract the `INTERNAL_NAMES` set and `isInternalName()` function from `selection.ts` (lines 125-142) into a shared utility:
 
-After line `let isActive = false;` (around line 146), add:
+```typescript
+// packages/overlay/src/utils/component-filter.ts
+
+/**
+ * Shared internal-component skip list for React fiber traversal.
+ * Used by selection.ts and resolve-helper.ts to filter out framework internals.
+ * Single source of truth — update this file when adding framework support.
+ */
+const INTERNAL_NAMES = new Set([
+  // Next.js internals
+  "InnerLayoutRouter", "OuterLayoutRouter", "RedirectErrorBoundary",
+  "RedirectBoundary", "HTTPAccessFallbackErrorBoundary", "HTTPAccessFallbackBoundary",
+  "LoadingBoundary", "ErrorBoundary", "ScrollAndFocusHandler", "InnerScrollAndFocusHandler",
+  "RenderFromTemplateContext", "DevRootHTTPAccessFallbackBoundary",
+  "AppDevOverlayErrorBoundary", "AppDevOverlay", "HotReload", "Router",
+  "ErrorBoundaryHandler", "AppRouter", "ServerRoot", "SegmentStateProvider",
+  "RootErrorBoundary",
+  // React internals
+  "Suspense", "Fragment", "StrictMode",
+  // Next.js RSC internals
+  "ReplaySsrOnlyErrors", "SegmentViewNode", "SegmentTrieNode",
+]);
+
+export function isInternalName(name: string): boolean {
+  if (INTERNAL_NAMES.has(name)) return true;
+  if (name.startsWith("_") || name.startsWith("$")) return true;
+  if (name.includes("Provider") || name.includes("Context")) return true;
+  if (name === "Head" || name === "html" || name === "body") return true;
+  return false;
+}
+```
+
+- [ ] **Step 2: Update selection.ts to import from component-filter**
+
+In `selection.ts`, replace the local `INTERNAL_NAMES` set and `isInternalName()` function (lines 125-142) with an import:
+
+```typescript
+import { isInternalName } from "./utils/component-filter.js";
+```
+
+Add this import after the existing imports (line 5). Then delete lines 125-142 (the `INTERNAL_NAMES` set and `isInternalName` function).
+
+- [ ] **Step 3: Add setEnabled and getSelectedElement exports**
+
+After line `let isActive = false;` (line 146), add:
 ```typescript
 let listenersAttached = false;
 ```
@@ -927,7 +973,7 @@ export function setEnabled(enabled: boolean): void {
 }
 ```
 
-Also add a getter for the currently selected DOM element (used by Move tool):
+Also add a getter for the currently selected DOM element (used by Move tool). `selectedElement` already exists at line 145:
 
 ```typescript
 export function getSelectedElement(): HTMLElement | null {
@@ -935,20 +981,18 @@ export function getSelectedElement(): HTMLElement | null {
 }
 ```
 
-Where `selectedElement` is the DOM element stored during selection (the element passed to `handleMouseDown`). If selection.ts doesn't already store this, add `let selectedElement: HTMLElement | null = null;` near the state variables, set it in the mousedown handler when a component is selected, and clear it on deselect.
-
 Also update `initSelection()` to set `listenersAttached = true` after attaching listeners, and update `deactivateSelection()` to set `listenersAttached = false`.
 
-- [ ] **Step 2: Verify build**
+- [ ] **Step 4: Verify build**
 
 Run: `cd /Users/gimdongha/Desktop/Projects/sketchUI && pnpm build:overlay`
 Expected: Build succeeds
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add packages/overlay/src/selection.ts
-git commit -m "feat(overlay): add setEnabled() to selection.ts for tool switching"
+git add packages/overlay/src/utils/component-filter.ts packages/overlay/src/selection.ts
+git commit -m "feat(overlay): extract component filter utility, add setEnabled() and getSelectedElement()"
 ```
 
 ---
@@ -1418,9 +1462,9 @@ git commit -m "feat(overlay): add tools panel — left sidebar with 7 tools, sub
 import { getActiveTool } from "./canvas-state.js";
 
 export type ToolEventHandler = {
-  onMouseDown?: (e: MouseEvent) => void;
+  onMouseDown?: (e: MouseEvent) => void | Promise<void>;
   onMouseMove?: (e: MouseEvent) => void;
-  onMouseUp?: (e: MouseEvent) => void;
+  onMouseUp?: (e: MouseEvent) => void | Promise<void>;
 };
 
 let interactionEl: HTMLDivElement | null = null;
@@ -1680,7 +1724,7 @@ import { simplifyPoints } from "../utils/rdp.js";
 import { resolveComponentAtPoint } from "./resolve-helper.js";
 
 let livePath: ReturnType<typeof createLivePath> = null;
-let startComponent: DrawAnnotation["targetComponent"] = null;
+let startComponentPromise: Promise<DrawAnnotation["targetComponent"]> | null = null;
 
 export const drawHandler: ToolEventHandler = {
   onMouseDown(e: MouseEvent) {
@@ -1691,8 +1735,8 @@ export const drawHandler: ToolEventHandler = {
       const pageY = e.clientY + window.scrollY;
       livePath.addPoint(pageX, pageY);
     }
-    // Resolve target from start point
-    startComponent = resolveComponentAtPoint(e.clientX, e.clientY);
+    // Resolve target from start point (async — resolves by mouseup)
+    startComponentPromise = resolveComponentAtPoint(e.clientX, e.clientY);
   },
   onMouseMove(e: MouseEvent) {
     if (!livePath) return;
@@ -1700,7 +1744,7 @@ export const drawHandler: ToolEventHandler = {
     const pageY = e.clientY + window.scrollY;
     livePath.addPoint(pageX, pageY);
   },
-  onMouseUp(_e: MouseEvent) {
+  async onMouseUp(_e: MouseEvent) {
     if (!livePath) return;
     const points = livePath.getPoints();
     const opts = getToolOptions();
@@ -1710,9 +1754,12 @@ export const drawHandler: ToolEventHandler = {
 
     if (points.length < 2) {
       livePath = null;
-      startComponent = null;
+      startComponentPromise = null;
       return;
     }
+
+    // Await the target component resolution (started on mousedown)
+    const startComponent = await startComponentPromise;
 
     // Simplify and add as permanent annotation
     const simplified = simplifyPoints(points, 2);
@@ -1728,50 +1775,67 @@ export const drawHandler: ToolEventHandler = {
     });
 
     livePath = null;
-    startComponent = null;
+    startComponentPromise = null;
   },
 };
 ```
 
 - [ ] **Step 2: Create resolve-helper.ts**
 
-A small shared helper that tools use to resolve the component under a point:
+An async helper that tools use to resolve the component under a point. Uses the same bippy + `isInternalName` logic as `selection.ts`, but delegates filtering to the shared `component-filter.ts` utility (created in Task 6):
 
 ```typescript
 // packages/overlay/src/tools/resolve-helper.ts
 import type { ComponentRef } from "@sketch-ui/shared";
 import { getFiberFromHostInstance, isCompositeFiber, getDisplayName } from "bippy";
-
-const INTERNAL_NAMES = new Set([
-  "InnerLayoutRouter", "OuterLayoutRouter", "RedirectErrorBoundary",
-  "RedirectBoundary", "HTTPAccessFallbackErrorBoundary", "HTTPAccessFallbackBoundary",
-  "LoadingBoundary", "ErrorBoundary", "ScrollAndFocusHandler", "InnerScrollAndFocusHandler",
-  "RenderFromTemplateContext", "DevRootHTTPAccessFallbackBoundary",
-  "AppDevOverlayErrorBoundary", "AppDevOverlay", "HotReload", "Router",
-  "ErrorBoundaryHandler", "AppRouter", "ServerRoot", "SegmentStateProvider",
-  "RootErrorBoundary", "Suspense", "Fragment", "StrictMode",
-  "ReplaySsrOnlyErrors", "SegmentViewNode", "SegmentTrieNode",
-]);
+import { getOwnerStack, normalizeFileName, isSourceFile } from "bippy/source";
+import { isInternalName } from "../utils/component-filter.js";
 
 /**
- * Quick synchronous resolve of the nearest React component under a viewport point.
+ * Async resolve of the nearest React component under a viewport point.
+ * Uses getOwnerStack (React 19 owner stacks + symbolication) with fiber walk fallback.
  * Used by draw/text/color tools to attach annotations to components.
  */
-export function resolveComponentAtPoint(clientX: number, clientY: number): ComponentRef | null {
+export async function resolveComponentAtPoint(clientX: number, clientY: number): Promise<ComponentRef | null> {
   const el = document.elementFromPoint(clientX, clientY) as HTMLElement;
   if (!el || el.closest("#sketch-ui-root") || el.hasAttribute("data-sketch-ui-ghost")) return null;
 
   const fiber = getFiberFromHostInstance(el);
   if (!fiber) return null;
 
+  // Try owner stack first (React 19 + source map symbolication)
+  try {
+    const frames = await getOwnerStack(fiber);
+    if (frames && frames.length > 0) {
+      for (const frame of frames) {
+        if (!frame.functionName) continue;
+        const name = frame.functionName;
+        if (name[0] !== name[0].toUpperCase()) continue;
+        if (isInternalName(name)) continue;
+
+        let filePath = "";
+        if (frame.fileName) {
+          const normalized = normalizeFileName(frame.fileName);
+          if (isSourceFile(normalized)) filePath = normalized;
+        }
+
+        return {
+          componentName: name,
+          filePath,
+          lineNumber: frame.lineNumber ?? 0,
+        };
+      }
+    }
+  } catch {
+    // Fall through to fiber walk
+  }
+
+  // Fallback: synchronous fiber walk (React 18 / _debugSource)
   let current = fiber;
   while (current) {
     if (isCompositeFiber(current)) {
       const name = getDisplayName(current.type);
-      if (name && name[0] === name[0].toUpperCase() && !INTERNAL_NAMES.has(name)
-          && !name.startsWith("_") && !name.startsWith("$")
-          && !name.includes("Provider") && !name.includes("Context")
-          && name !== "Head" && name !== "html" && name !== "body") {
+      if (name && name[0] === name[0].toUpperCase() && !isInternalName(name)) {
         const debugSource = (current as any)._debugSource || (current as any)._debugOwner?._debugSource;
         return {
           componentName: name,
@@ -1791,13 +1855,14 @@ export function resolveComponentAtPoint(clientX: number, clientY: number): Compo
 ```typescript
 // packages/overlay/src/tools/text.ts
 import type { ToolEventHandler } from "../interaction.js";
+import type { ComponentRef } from "@sketch-ui/shared";
 import { getToolOptions, addAnnotation } from "../canvas-state.js";
 import { addTextAnnotation } from "../annotation-layer.js";
 import { resolveComponentAtPoint } from "./resolve-helper.js";
 
 let activeInput: HTMLInputElement | null = null;
 let clickPos: { pageX: number; pageY: number } | null = null;
-let targetComp: ReturnType<typeof resolveComponentAtPoint> = null;
+let targetComp: ComponentRef | null = null;
 
 export const textHandler: ToolEventHandler = {
   onMouseDown(e: MouseEvent) {
@@ -1807,7 +1872,8 @@ export const textHandler: ToolEventHandler = {
     const pageX = e.clientX + window.scrollX;
     const pageY = e.clientY + window.scrollY;
     clickPos = { pageX, pageY };
-    targetComp = resolveComponentAtPoint(e.clientX, e.clientY);
+    // Resolve target async — will be available by the time user finishes typing
+    resolveComponentAtPoint(e.clientX, e.clientY).then(comp => { targetComp = comp; });
 
     // Create a text input at the click position
     activeInput = document.createElement("input");
@@ -1886,6 +1952,7 @@ export function cleanupTextTool(): void {
 ```typescript
 // packages/overlay/src/tools/color.ts
 import type { ToolEventHandler } from "../interaction.js";
+import type { ComponentRef } from "@sketch-ui/shared";
 import { addAnnotation, type ColorOverrideRuntime } from "../canvas-state.js";
 import { addColorBadge } from "../annotation-layer.js";
 import { resolveComponentAtPoint } from "./resolve-helper.js";
@@ -1894,14 +1961,14 @@ import { getShadowRoot } from "../toolbar.js";
 let pickerEl: HTMLDivElement | null = null;
 
 export const colorHandler: ToolEventHandler = {
-  onMouseDown(e: MouseEvent) {
+  async onMouseDown(e: MouseEvent) {
     // Close existing picker
     if (pickerEl) { pickerEl.remove(); pickerEl = null; }
 
     const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement;
     if (!el || el.closest("#sketch-ui-root") || el.hasAttribute("data-sketch-ui-ghost")) return;
 
-    const comp = resolveComponentAtPoint(e.clientX, e.clientY);
+    const comp = await resolveComponentAtPoint(e.clientX, e.clientY);
     if (!comp) return;
 
     const computedBg = getComputedStyle(el).backgroundColor;
@@ -2064,7 +2131,7 @@ export const lassoHandler: ToolEventHandler = {
     updateLassoPath();
   },
 
-  onMouseUp(_e: MouseEvent) {
+  async onMouseUp(_e: MouseEvent) {
     if (lassoPoints.length < 3) {
       cleanupLassoVisual();
       return;
@@ -2078,6 +2145,8 @@ export const lassoHandler: ToolEventHandler = {
     const allElements = document.querySelectorAll("*");
     const seen = new Set<string>();
 
+    // Collect candidate elements first, then resolve components in parallel
+    const candidates: Array<{ el: HTMLElement; rect: DOMRect }> = [];
     for (const el of allElements) {
       if (el.closest("#sketch-ui-root")) continue;
       if ((el as HTMLElement).hasAttribute?.("data-sketch-ui-ghost")) continue;
@@ -2088,16 +2157,24 @@ export const lassoHandler: ToolEventHandler = {
         rect.top < bounds.bottom && rect.bottom > bounds.top &&
         rect.width > 0 && rect.height > 0
       ) {
-        const comp = resolveComponentAtPoint(
-          rect.left + rect.width / 2,
-          rect.top + rect.height / 2
-        );
-        if (comp && !seen.has(`${comp.filePath}:${comp.lineNumber}`)) {
-          seen.add(`${comp.filePath}:${comp.lineNumber}`);
-          selectedElements.push(el as HTMLElement);
-          // Show selection border
-          showSelectionBorder(rect);
-        }
+        candidates.push({ el: el as HTMLElement, rect });
+      }
+    }
+
+    // Resolve all components in parallel
+    const results = await Promise.all(
+      candidates.map(({ rect }) =>
+        resolveComponentAtPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+      )
+    );
+
+    for (let i = 0; i < candidates.length; i++) {
+      const comp = results[i];
+      const { el, rect } = candidates[i];
+      if (comp && !seen.has(`${comp.filePath}:${comp.lineNumber}`)) {
+        seen.add(`${comp.filePath}:${comp.lineNumber}`);
+        selectedElements.push(el);
+        showSelectionBorder(rect);
       }
     }
   },
