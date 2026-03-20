@@ -1,5 +1,6 @@
 // packages/overlay/src/annotation-layer.ts
 import { getShadowRoot } from "./toolbar.js";
+import { COLORS, SHADOWS, RADII, FONT_FAMILY } from "./design-tokens.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -83,12 +84,14 @@ export function addTextAnnotation(
 
   const div = document.createElement("div");
   div.style.cssText = `
-    background: rgba(0,0,0,0.8);
-    color: ${color};
+    background: ${COLORS.bgPrimary};
+    color: ${COLORS.textPrimary};
+    border: 1px solid ${COLORS.border};
+    box-shadow: ${SHADOWS.sm};
     padding: 4px 8px;
-    border-radius: 4px;
+    border-radius: ${RADII.sm};
     font-size: ${fontSize}px;
-    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: ${FONT_FAMILY};
     display: inline-block;
     white-space: pre-wrap;
     max-width: 280px;
