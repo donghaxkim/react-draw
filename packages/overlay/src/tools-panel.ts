@@ -3,6 +3,7 @@ import type { ToolType } from "@sketch-ui/shared";
 import { getActiveTool, setActiveTool, getToolOptions, setToolOption } from "./canvas-state.js";
 import { getShadowRoot } from "./toolbar.js";
 import { COLORS, SHADOWS, RADII, TRANSITIONS, FONT_FAMILY } from "./design-tokens.js";
+import { openColorPicker } from "./color-picker.js";
 
 const ICONS = {
   pointer: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 9-7 1-4 7z"/></svg>`,
@@ -310,7 +311,17 @@ function updateSubOptions(tool: ToolType): void {
     swatch.className = "color-swatch";
     swatch.style.background = opts.brushColor;
     swatch.addEventListener("click", () => {
-      // Opens custom color picker (Task 9)
+      const rect = swatch.getBoundingClientRect();
+      openColorPicker({
+        initialColor: opts.brushColor,
+        position: { x: rect.right + 8, y: rect.top },
+        showPropertyToggle: false,
+        onColorChange(hex) {
+          setToolOption("brushColor", hex);
+          swatch.style.background = hex;
+        },
+        onClose() {},
+      });
     });
     subOptionsEl.appendChild(swatch);
 
@@ -341,7 +352,17 @@ function updateSubOptions(tool: ToolType): void {
     swatch.className = "color-swatch";
     swatch.style.background = opts.textColor;
     swatch.addEventListener("click", () => {
-      // Opens custom color picker (Task 9)
+      const rect = swatch.getBoundingClientRect();
+      openColorPicker({
+        initialColor: opts.textColor,
+        position: { x: rect.right + 8, y: rect.top },
+        showPropertyToggle: false,
+        onColorChange(hex) {
+          setToolOption("textColor", hex);
+          swatch.style.background = hex;
+        },
+        onClose() {},
+      });
     });
     subOptionsEl.appendChild(swatch);
 
