@@ -222,7 +222,7 @@ export function mountToolbar(onClose: () => void): void {
 
   // Show message when another tab takes over
   setOnTabTakenOver(() => {
-    showError("Disconnected: another tab took over");
+    showToast("Disconnected: another tab took over");
   });
 
   // Reset undo counter on reconnect (server clears undo stack on disconnect)
@@ -247,7 +247,7 @@ export function mountToolbar(onClose: () => void): void {
             }, 200);
           }
         } else if (msg.error) {
-          showError(msg.error);
+          showToast(msg.error);
         }
         break;
 
@@ -264,12 +264,12 @@ export function mountToolbar(onClose: () => void): void {
             }, 200);
           }
         } else if (msg.error) {
-          showError(msg.error);
+          showToast(msg.error);
         }
         break;
 
       case "devServerDisconnected":
-        showError("Dev server disconnected");
+        showToast("Dev server disconnected");
         break;
 
       case "devServerReconnected":
@@ -279,9 +279,6 @@ export function mountToolbar(onClose: () => void): void {
   });
 }
 
-export function showError(message: string): void {
-  showToast(message);
-}
 
 export function destroyToolbar(): void {
   const host = document.getElementById("sketch-ui-root");

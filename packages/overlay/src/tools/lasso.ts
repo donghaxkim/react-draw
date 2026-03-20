@@ -140,6 +140,3 @@ export function clearLassoSelection(): void {
   selectedElements = [];
 }
 
-export function getLassoSelectedElements(): HTMLElement[] {
-  return selectedElements;
-}
