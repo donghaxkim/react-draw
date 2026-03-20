@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-03-20-sketchui-phase2a-design.md`
 
-**Testing note:** The overlay package is a browser IIFE bundle with no test harness. Verification uses `tsc --noEmit` for type safety and manual browser testing via the test-app. The RDP utility (Task 3) is pure logic and gets a vitest unit test.
+**Testing note:** The overlay package is a browser IIFE bundle with no test harness. Verification uses `tsc --noEmit` for type safety and manual browser testing via the tst-app. The RDP utility (Task 3) is pure logic and gets a vitest unit test.
 
 ---
 

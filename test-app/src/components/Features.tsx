@@ -1,3 +1,4 @@
+"use client";
 export function Features() {
   const features = [
     { title: "Visual Editing", desc: "Click and drag components to reorder them instantly." },

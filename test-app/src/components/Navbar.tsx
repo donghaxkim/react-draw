@@ -1,3 +1,4 @@
+"use client";
 export function Navbar() {
   return (
     <nav style={{ padding: "16px 32px", background: "#1a1a2e", color: "white", display: "flex", justifyContent: "space-between", alignItems: "center" }}>

@@ -1,3 +1,4 @@
+"use client";
 export function Pricing() {
   return (
     <section style={{ padding: "64px 32px", textAlign: "center" }}>

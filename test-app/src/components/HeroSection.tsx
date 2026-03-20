@@ -1,3 +1,4 @@
+"use client";
 export function HeroSection() {
   return (
     <section style={{ padding: "80px 32px", textAlign: "center", background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)", color: "white" }}>

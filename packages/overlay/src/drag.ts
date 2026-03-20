@@ -1,5 +1,5 @@
 // packages/overlay/src/drag.ts
-import { resolveElementInfo } from "element-source";
+import { getFiberFromHostInstance, isCompositeFiber, getDisplayName } from "bippy";
 import type { ComponentInfo, SiblingInfo } from "@sketch-ui/shared";
 import { send, onMessage } from "./bridge.js";
 import { clearSelection, setDragCallbacks } from "./selection.js";
@@ -114,32 +114,40 @@ function handleDragStart(e: MouseEvent, el: HTMLElement, selection: ComponentInf
     parentLine: parentStack.lineNumber,
   });
 
-  const unsubscribe = onMessage(async (msg) => {
+  const unsubscribe = onMessage((msg) => {
     if (msg.type !== "siblingsList") return;
     unsubscribe();
 
     siblings = msg.siblings;
 
-    // Match siblings to DOM elements
+    // Match siblings to DOM elements using bippy fiber walking
     const allElements = document.querySelectorAll("*");
     for (const sibEl of allElements) {
       if (sibEl.closest("#sketch-ui-root")) continue;
-      try {
-        const info = await resolveElementInfo(sibEl as HTMLElement);
-        if (!info?.source) continue;
-        for (const sib of msg.siblings) {
-          if (
-            info.source.lineNumber === sib.lineNumber &&
-            info.source.filePath === parentStack.filePath
-          ) {
-            siblingElements.set(sib.lineNumber, {
-              el: sibEl as HTMLElement,
-              rect: (sibEl as HTMLElement).getBoundingClientRect(),
-            });
+      const fiber = getFiberFromHostInstance(sibEl);
+      if (!fiber) continue;
+
+      // Walk up to find the nearest composite fiber with source info
+      let current = fiber;
+      while (current) {
+        if (isCompositeFiber(current)) {
+          const debugSource = (current as any)._debugSource || (current as any)._debugOwner?._debugSource;
+          if (debugSource) {
+            for (const sib of msg.siblings) {
+              if (
+                debugSource.lineNumber === sib.lineNumber &&
+                debugSource.fileName === parentStack.filePath
+              ) {
+                siblingElements.set(sib.lineNumber, {
+                  el: sibEl as HTMLElement,
+                  rect: (sibEl as HTMLElement).getBoundingClientRect(),
+                });
+              }
+            }
+            break; // Only check the nearest composite fiber
           }
         }
-      } catch {
-        // Skip
+        current = current.return;
       }
     }
 
