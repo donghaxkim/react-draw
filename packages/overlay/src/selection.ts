@@ -1,12 +1,133 @@
 // packages/overlay/src/selection.ts
-import { resolveElementInfo } from "element-source";
-import { freeze, unfreeze } from "react-grab/primitives";
+import { getFiberFromHostInstance, getDisplayName, isCompositeFiber, isInstrumentationActive, instrument } from "bippy";
+import { getOwnerStack, normalizeFileName, isSourceFile } from "bippy/source";
 import type { ComponentInfo } from "@sketch-ui/shared";
 import { updateComponentInfo, getShadowRoot } from "./toolbar.js";
+import { isInternalName } from "./utils/component-filter.js";
+
+// Ensure bippy instrumentation is active so we can read fiber info
+if (!isInstrumentationActive()) {
+  instrument({
+    onCommitFiberRoot() {
+      // no-op — we just need the hook installed
+    },
+  });
+}
+
+type ResolvedComponent = {
+  tagName: string;
+  componentName: string;
+  filePath: string;
+  lineNumber: number;
+  columnNumber: number;
+  stack: Array<{ componentName: string; filePath: string; lineNumber: number; columnNumber: number }>;
+};
+
+/**
+ * Resolve component info from a DOM element using bippy's owner stack.
+ * Handles both React 18 (_debugSource) and React 19 (owner stacks + source maps).
+ */
+async function resolveComponentFromElement(el: HTMLElement): Promise<ResolvedComponent | null> {
+  const fiber = getFiberFromHostInstance(el);
+  if (!fiber) return null;
+
+  // Try bippy/source getOwnerStack first — handles React 19 owner stacks with symbolication
+  try {
+    const frames = await getOwnerStack(fiber);
+    if (frames && frames.length > 0) {
+      const stack: ResolvedComponent["stack"] = [];
+      for (const frame of frames) {
+        if (!frame.functionName) continue;
+        const name = frame.functionName;
+        if (name[0] !== name[0].toUpperCase()) continue;
+        if (isInternalName(name)) continue;
+
+        let filePath = "";
+        if (frame.fileName) {
+          const normalized = normalizeFileName(frame.fileName);
+          if (isSourceFile(normalized)) {
+            filePath = normalized;
+          }
+        }
+
+        stack.push({
+          componentName: name,
+          filePath,
+          lineNumber: frame.lineNumber ?? 0,
+          columnNumber: frame.columnNumber ?? 0,
+        });
+      }
+
+      if (stack.length > 0) {
+        return {
+          tagName: el.tagName.toLowerCase(),
+          componentName: stack[0].componentName,
+          filePath: stack[0].filePath,
+          lineNumber: stack[0].lineNumber,
+          columnNumber: stack[0].columnNumber,
+          stack,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn("[SketchUI] getOwnerStack failed, falling back to fiber walk:", err);
+  }
+
+  // Fallback: synchronous fiber walk (works when owner stacks aren't available)
+  return resolveComponentFromFiberWalk(el, fiber);
+}
+
+/** Synchronous fallback — walks fiber.return chain for component names */
+function resolveComponentFromFiberWalk(el: HTMLElement, fiber: any): ResolvedComponent | null {
+  const stack: ResolvedComponent["stack"] = [];
+  let current = fiber;
+
+  while (current) {
+    if (isCompositeFiber(current)) {
+      const name = getDisplayName(current.type);
+      const debugSource = current._debugSource || current._debugOwner?._debugSource;
+
+      let filePath = "";
+      let lineNumber = 0;
+      let columnNumber = 0;
+
+      if (debugSource) {
+        filePath = debugSource.fileName || "";
+        lineNumber = debugSource.lineNumber || 0;
+        columnNumber = debugSource.columnNumber || 0;
+      }
+
+      if (name && name[0] === name[0].toUpperCase() && !isInternalName(name)) {
+        stack.push({ componentName: name, filePath, lineNumber, columnNumber });
+      }
+    }
+    current = current.return;
+  }
+
+  if (stack.length === 0) return null;
+
+  return {
+    tagName: el.tagName.toLowerCase(),
+    componentName: stack[0].componentName,
+    filePath: stack[0].filePath,
+    lineNumber: stack[0].lineNumber,
+    columnNumber: stack[0].columnNumber,
+    stack,
+  };
+}
+
+/** Synchronous-only resolve for hover labels and marquee (fast path) */
+function resolveComponentSync(el: HTMLElement): ResolvedComponent | null {
+  const fiber = getFiberFromHostInstance(el);
+  if (!fiber) return null;
+  return resolveComponentFromFiberWalk(el, fiber);
+}
+
 
 let currentSelection: ComponentInfo | null = null;
 let selectedElement: HTMLElement | null = null;
 let isActive = false;
+let listenersAttached = false;
 
 // Overlay elements
 let hoverOverlay: HTMLDivElement | null = null;
@@ -100,7 +221,6 @@ export function initSelection(): void {
   marqueeBox.className = "marquee-box";
   shadowRoot.appendChild(marqueeBox);
 
-  freeze();
   isActive = true;
 
   // Single set of event listeners — selection.ts owns all mouse dispatch
@@ -108,6 +228,7 @@ export function initSelection(): void {
   document.addEventListener("mousemove", handleMouseMove, true);
   document.addEventListener("mouseup", handleMouseUp, true);
   document.addEventListener("keydown", handleKeyDown, true);
+  listenersAttached = true;
 }
 
 function handleMouseDown(e: MouseEvent): void {
@@ -183,7 +304,7 @@ function handleMouseMove(e: MouseEvent): void {
   }
 }
 
-async function handleMouseUp(e: MouseEvent): Promise<void> {
+function handleMouseUp(e: MouseEvent): void {
   if (!isActive) return;
 
   const prevMode = mode;
@@ -198,7 +319,7 @@ async function handleMouseUp(e: MouseEvent): Promise<void> {
 
   if (prevMode === "marquee" && mouseDownPos) {
     if (marqueeBox) marqueeBox.style.display = "none";
-    await performMarqueeSelect(
+    performMarqueeSelect(
       Math.min(e.clientX, mouseDownPos.x),
       Math.min(e.clientY, mouseDownPos.y),
       Math.max(e.clientX, mouseDownPos.x),
@@ -211,7 +332,7 @@ async function handleMouseUp(e: MouseEvent): Promise<void> {
 
   // prevMode was "pending" — treat as a click (small movement)
   if (mouseDownElement) {
-    await selectElement(mouseDownElement);
+    selectElement(mouseDownElement);
   }
   mouseDownPos = null;
   mouseDownElement = null;
@@ -219,17 +340,18 @@ async function handleMouseUp(e: MouseEvent): Promise<void> {
 
 async function selectElement(el: HTMLElement): Promise<void> {
   try {
-    const info = await resolveElementInfo(el);
-    if (!info || !info.source) return;
+    const resolved = await resolveComponentFromElement(el);
+    console.log("[SketchUI] selectElement:", el.tagName, "→", resolved?.componentName, resolved?.filePath, "stack:", resolved?.stack?.map(s => s.componentName));
+    if (!resolved) return;
 
     selectedElement = el;
     currentSelection = {
-      tagName: info.tagName || el.tagName.toLowerCase(),
-      componentName: info.componentName || el.tagName.toLowerCase(),
-      filePath: info.source.filePath,
-      lineNumber: info.source.lineNumber,
-      columnNumber: info.source.columnNumber,
-      stack: info.stack || [],
+      tagName: resolved.tagName,
+      componentName: resolved.componentName,
+      filePath: resolved.filePath,
+      lineNumber: resolved.lineNumber,
+      columnNumber: resolved.columnNumber,
+      stack: resolved.stack,
       boundingRect: {
         top: el.getBoundingClientRect().top,
         left: el.getBoundingClientRect().left,
@@ -241,20 +363,25 @@ async function selectElement(el: HTMLElement): Promise<void> {
     showSelectionOverlay(el.getBoundingClientRect(), currentSelection);
     hideHoverOverlay();
 
-    updateComponentInfo(
-      `<${currentSelection.componentName} /> — ${currentSelection.filePath}:${currentSelection.lineNumber}`
-    );
-  } catch {
-    // Element might not have React fiber info
+    // Show element + component: "<a> in <Navbar /> — src/components/Navbar.tsx:7"
+    const tagPart = `<${resolved.tagName}>`;
+    const compPart = `<${resolved.componentName} />`;
+    const locPart = resolved.filePath ? ` — ${resolved.filePath}:${resolved.lineNumber}` : "";
+    const display = resolved.tagName === resolved.componentName.toLowerCase()
+      ? `${compPart}${locPart}`
+      : `${tagPart} in ${compPart}${locPart}`;
+    updateComponentInfo(display);
+  } catch (err) {
+    console.error("[SketchUI] selectElement error:", err);
   }
 }
 
-async function performMarqueeSelect(
+function performMarqueeSelect(
   x1: number,
   y1: number,
   x2: number,
   y2: number
-): Promise<void> {
+): void {
   const elements: HTMLElement[] = [];
   const allElements = document.querySelectorAll("*");
 
@@ -275,15 +402,12 @@ async function performMarqueeSelect(
 
   if (elements.length === 0) return;
 
+  // Use sync resolve for marquee (fast path)
   const stacks: Array<ComponentInfo["stack"]> = [];
   for (const el of elements.slice(0, 50)) {
-    try {
-      const info = await resolveElementInfo(el);
-      if (info?.stack?.length) {
-        stacks.push(info.stack);
-      }
-    } catch {
-      // Skip
+    const resolved = resolveComponentSync(el);
+    if (resolved?.stack?.length) {
+      stacks.push(resolved.stack);
     }
   }
 
@@ -293,37 +417,33 @@ async function performMarqueeSelect(
   if (!lca) return;
 
   for (const el of elements) {
-    try {
-      const info = await resolveElementInfo(el);
-      if (
-        info?.source?.filePath === lca.filePath &&
-        info?.source?.lineNumber === lca.lineNumber
-      ) {
-        const rect = el.getBoundingClientRect();
-        selectedElement = el as HTMLElement;
-        currentSelection = {
-          tagName: info.tagName || el.tagName.toLowerCase(),
-          componentName: lca.componentName,
-          filePath: lca.filePath,
-          lineNumber: lca.lineNumber,
-          columnNumber: lca.columnNumber,
-          stack: info.stack || [],
-          boundingRect: {
-            top: rect.top,
-            left: rect.left,
-            width: rect.width,
-            height: rect.height,
-          },
-        };
+    const resolved = resolveComponentSync(el);
+    if (
+      resolved &&
+      resolved.componentName === lca.componentName
+    ) {
+      const rect = el.getBoundingClientRect();
+      selectedElement = el as HTMLElement;
+      currentSelection = {
+        tagName: el.tagName.toLowerCase(),
+        componentName: lca.componentName,
+        filePath: lca.filePath,
+        lineNumber: lca.lineNumber,
+        columnNumber: lca.columnNumber,
+        stack: resolved.stack,
+        boundingRect: {
+          top: rect.top,
+          left: rect.left,
+          width: rect.width,
+          height: rect.height,
+        },
+      };
 
-        showSelectionOverlay(rect, currentSelection);
-        updateComponentInfo(
-          `<${lca.componentName} /> — ${lca.filePath}:${lca.lineNumber}`
-        );
-        return;
-      }
-    } catch {
-      // Skip
+      showSelectionOverlay(rect, currentSelection);
+      updateComponentInfo(
+        `<${lca.componentName} /> — ${lca.filePath}:${lca.lineNumber}`
+      );
+      return;
     }
   }
 }
@@ -400,9 +520,37 @@ export function getSelection(): ComponentInfo | null {
 
 export function deactivateSelection(): void {
   isActive = false;
-  unfreeze();
   document.removeEventListener("mousedown", handleMouseDown, true);
   document.removeEventListener("mousemove", handleMouseMove, true);
   document.removeEventListener("mouseup", handleMouseUp, true);
   document.removeEventListener("keydown", handleKeyDown, true);
+  listenersAttached = false;
+}
+
+/**
+ * Enable/disable Phase 1 selection handlers.
+ * setEnabled(false) removes capture-phase listeners so the interaction layer can receive events.
+ * setEnabled(true) re-attaches them for Pointer mode.
+ * Different from deactivateSelection() which is a permanent teardown.
+ */
+export function setEnabled(enabled: boolean): void {
+  if (enabled && !listenersAttached) {
+    document.addEventListener("mousedown", handleMouseDown, true);
+    document.addEventListener("mousemove", handleMouseMove, true);
+    document.addEventListener("mouseup", handleMouseUp, true);
+    document.addEventListener("keydown", handleKeyDown, true);
+    listenersAttached = true;
+    isActive = true;
+  } else if (!enabled && listenersAttached) {
+    document.removeEventListener("mousedown", handleMouseDown, true);
+    document.removeEventListener("mousemove", handleMouseMove, true);
+    document.removeEventListener("mouseup", handleMouseUp, true);
+    document.removeEventListener("keydown", handleKeyDown, true);
+    listenersAttached = false;
+    isActive = false;
+  }
+}
+
+export function getSelectedElement(): HTMLElement | null {
+  return selectedElement ?? null;
 }
