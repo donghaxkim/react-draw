@@ -1,38 +1,138 @@
 // packages/overlay/src/index.ts
 import { connect, disconnect } from "./bridge.js";
-import { mountToolbar, destroyToolbar } from "./toolbar.js";
+import { mountToolbar, destroyToolbar, updateModeLabel, setOnEyeToggle, setOnGenerate, setOnCanvasUndo, updateEyeButton, updateGenerateButton, showToast } from "./toolbar.js";
 import { initSelection, deactivateSelection } from "./selection.js";
 import { initDrag, deactivateDrag } from "./drag.js";
+import { initAnnotationLayer, destroyAnnotationLayer, clearAnnotationLayer, removeAnnotationElement } from "./annotation-layer.js";
+import { initGhostLayer, destroyGhostLayer } from "./ghost-layer.js";
+import { initToolsPanel, destroyToolsPanel, updateActiveToolUI, setOnClearAll } from "./tools-panel.js";
+import { initInteraction, destroyInteraction, activateInteraction, registerToolHandler } from "./interaction.js";
+import {
+  onToolChange, onStateChange, getActiveTool, setActiveTool,
+  canvasUndo, resetCanvas, hasChanges, serializeAnnotations,
+  getOriginalsHidden, setOriginalsHidden,
+} from "./canvas-state.js";
+import { activatePointer, deactivatePointer } from "./tools/pointer.js";
+import { grabHandler } from "./tools/grab.js";
+import { moveHandler, returnToMoveAfterSelect } from "./tools/move.js";
+import { drawHandler } from "./tools/draw.js";
+import { textHandler, cleanupTextTool } from "./tools/text.js";
+import { colorHandler, cleanupColorTool } from "./tools/color.js";
+import { lassoHandler, clearLassoSelection } from "./tools/lasso.js";
+
+declare global {
+  interface Window {
+    __SKETCH_UI_WS_PORT__?: number;
+  }
+}
+
+const TOOL_LABELS: Record<string, string> = {
+  pointer: "Select",
+  grab: "Grab",
+  move: "Move",
+  draw: "Draw",
+  color: "Color",
+  text: "Text",
+  lasso: "Lasso",
+};
 
 function init(): void {
-  const wsPort = (window as any).__SKETCH_UI_WS_PORT__;
+  const wsPort = window.__SKETCH_UI_WS_PORT__;
   if (!wsPort) {
-    console.error("[SketchUI] No WebSocket port configured");
+    console.warn("[SketchUI] No WebSocket port found.");
     return;
   }
 
-  // Prevent double initialization
-  if (document.getElementById("sketch-ui-root")) return;
+  if (document.getElementById("sketch-ui-root")) return; // Already initialized
 
-  // Connect WebSocket
   connect(wsPort);
+  mountToolbar(close);
 
-  // Mount toolbar with close handler
-  mountToolbar(() => {
-    deactivateSelection();
-    deactivateDrag();
-    disconnect();
-    destroyToolbar();
-  });
-
-  // Initialize selection and drag systems
+  // Phase 1 systems
   initSelection();
   initDrag();
 
-  console.log("[SketchUI] Overlay initialized");
+  // Phase 2A layers
+  initAnnotationLayer();
+  initGhostLayer();
+  initToolsPanel();
+  initInteraction();
+
+  // Register tool handlers with interaction layer
+  registerToolHandler("grab", grabHandler);
+  registerToolHandler("move", moveHandler);
+  registerToolHandler("draw", drawHandler);
+  registerToolHandler("text", textHandler);
+  registerToolHandler("color", colorHandler);
+  registerToolHandler("lasso", lassoHandler);
+
+  // Tool change listener — handles mode switching
+  onToolChange((tool, prev) => {
+    // Cleanup previous tool
+    if (prev === "pointer") deactivatePointer();
+    if (prev === "text") cleanupTextTool();
+    if (prev === "color") cleanupColorTool();
+    if (prev === "lasso") clearLassoSelection();
+
+    // Activate new tool
+    if (tool === "pointer") activatePointer();
+    activateInteraction(tool);
+    updateActiveToolUI(tool);
+    updateModeLabel(TOOL_LABELS[tool] || tool);
+  });
+
+  // State change → update generate button
+  onStateChange(() => {
+    updateGenerateButton(hasChanges());
+  });
+
+  // Eye toggle
+  setOnEyeToggle(() => {
+    const next = !getOriginalsHidden();
+    setOriginalsHidden(next);
+    updateEyeButton(next);
+  });
+
+  // Generate button (Phase 2A: log to console)
+  setOnGenerate(() => {
+    const data = serializeAnnotations();
+    console.log("[SketchUI] Generate — serialized annotations:", JSON.stringify(data, null, 2));
+  });
+
+  // Canvas undo (Ctrl+Z) — returns true if handled, false if Pointer mode (Phase 1 source undo)
+  setOnCanvasUndo(() => {
+    if (getActiveTool() === "pointer") return false; // Let selection.ts handle Ctrl+Z
+    const description = canvasUndo();
+    if (description) {
+      showToast(`Undo: ${description}`);
+      return true;
+    }
+    return false;
+  });
+
+  // Clear All
+  setOnClearAll(() => {
+    clearAnnotationLayer();
+    clearLassoSelection();
+    resetCanvas();
+    showToast("Canvas cleared");
+  });
+
+  console.log("[SketchUI] Overlay initialized with Phase 2A canvas tools");
 }
 
-// Initialize when DOM is ready
+function close(): void {
+  deactivateSelection();
+  deactivateDrag();
+  destroyAnnotationLayer();
+  destroyGhostLayer();
+  destroyToolsPanel();
+  destroyInteraction();
+  resetCanvas();
+  disconnect();
+  destroyToolbar();
+}
+
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", init);
 } else {
