@@ -8,6 +8,8 @@ import { initAnnotationLayer, destroyAnnotationLayer, clearAnnotationLayer, remo
 import { initGhostLayer, destroyGhostLayer } from "./ghost-layer.js";
 import { initToolsPanel, destroyToolsPanel, updateActiveToolUI, setOnClearAll, setOnCanvasUndo as setOnCanvasUndoPanel, updateCanvasUndoButton, flashToolButton } from "./tools-panel.js";
 import { initInteraction, destroyInteraction, activateInteraction, registerToolHandler } from "./interaction.js";
+import { clearElementCache } from "./utils/element-cache.js";
+import { clearVisibilityCache } from "./utils/component-filter.js";
 import { showOnboardingHint, dismissOnboarding } from "./onboarding.js";
 import {
   onToolChange, onStateChange, getActiveTool, setActiveTool,
@@ -71,6 +73,10 @@ function init(): void {
     if (prev === "color") cleanupColorTool();
     if (prev === "lasso") clearLassoSelection();
 
+    // Clear caches on tool switch
+    clearElementCache();
+    clearVisibilityCache();
+
     // Activate new tool
     if (tool === "pointer") activatePointer();
     activateInteraction(tool);
@@ -129,6 +135,8 @@ function init(): void {
 }
 
 function close(): void {
+  clearElementCache();
+  clearVisibilityCache();
   deactivateSelection();
   destroyHighlightCanvas();
   deactivateDrag();
