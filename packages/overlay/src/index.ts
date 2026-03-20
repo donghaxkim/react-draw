@@ -7,6 +7,7 @@ import { initAnnotationLayer, destroyAnnotationLayer, clearAnnotationLayer, remo
 import { initGhostLayer, destroyGhostLayer } from "./ghost-layer.js";
 import { initToolsPanel, destroyToolsPanel, updateActiveToolUI, setOnClearAll } from "./tools-panel.js";
 import { initInteraction, destroyInteraction, activateInteraction, registerToolHandler } from "./interaction.js";
+import { showOnboardingHint, dismissOnboarding } from "./onboarding.js";
 import {
   onToolChange, onStateChange, getActiveTool, setActiveTool,
   canvasUndo, resetCanvas, hasChanges, serializeAnnotations,
@@ -57,6 +58,7 @@ function init(): void {
   initGhostLayer();
   initToolsPanel();
   initInteraction();
+  showOnboardingHint();
 
   // Register tool handlers with interaction layer
   registerToolHandler("grab", grabHandler);
@@ -68,6 +70,7 @@ function init(): void {
 
   // Tool change listener — handles mode switching
   onToolChange((tool, prev) => {
+    dismissOnboarding(); // Dismiss onboarding on any tool interaction
     // Cleanup previous tool
     if (prev === "pointer") deactivatePointer();
     if (prev === "text") cleanupTextTool();
