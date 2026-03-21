@@ -97,6 +97,42 @@ interface EnumOption {
 
 The `compound` flag enables the box-model control: the section renderer collects all descriptors with the same `compoundGroup` and passes the array to a single control instance instead of creating individual controls.
 
+### PropertyControl Interface
+
+Every control component implements this interface. The section renderer instantiates controls uniformly from descriptors:
+
+```typescript
+interface PropertyControl {
+  // Always receives an array of descriptors. Non-compound controls get a
+  // single-element array and read descriptors[0]. Compound controls (box-model)
+  // iterate the full array. One interface, no special case.
+  render(
+    descriptors: PropertyDescriptor[],
+    currentValues: Map<string, string>,
+    tokens: TailwindTokenMap
+  ): HTMLElement;
+
+  // Called when value changes externally (undo, HMR rebuild, or
+  // bidirectional sync like corner handle ↔ sidebar number-scrub)
+  setValue(key: string, value: string): void;
+
+  // Fires during interaction (drag, scrub, type) — controller applies preview
+  onPreview: (key: string, cssValue: string) => void;
+
+  // Fires on interaction end (mouseup, blur, Enter) — controller commits
+  onCommit: () => void;
+
+  // Cleanup
+  destroy(): void;
+}
+```
+
+The section renderer wires callbacks to the controller:
+```typescript
+control.onPreview = (key, cssValue) => controller.preview(key, cssValue);
+control.onCommit = () => controller.commit();
+```
+
 ### WebSocket Messages
 
 ```typescript
@@ -453,6 +489,36 @@ const SHORTHAND_SPLITS: Record<string, Record<string, string[]>> = {
 | Pure dynamic expression | Error: "Cannot modify dynamic className" |
 | No className prop | Creates the prop |
 
+### Transform Error Taxonomy
+
+The `updatePropertyComplete` message includes an `errorCode` field for specific failure modes. The overlay shows targeted messages for each:
+
+```typescript
+| {
+    type: "updatePropertyComplete";
+    success: boolean;
+    error?: string;                    // human-readable message
+    errorCode?: TransformErrorCode;    // machine-readable for overlay UI handling
+  }
+
+type TransformErrorCode =
+  | "DYNAMIC_CLASSNAME"      // className is a computed expression, can't statically analyze
+  | "FILE_CHANGED"           // file on disk differs from what the browser expects (editor save race)
+  | "MAPPED_ELEMENT"         // target JSX is inside .map() — change affects all rendered instances
+  | "CONFLICTING_CLASS";     // same property set in both static and conditional class args
+```
+
+**Overlay handling per error code:**
+
+| Error Code | Sidebar Behavior |
+|------------|-----------------|
+| `DYNAMIC_CLASSNAME` | Show inline message: "This element uses a dynamic className. Edit the class manually in `{filePath}:{line}`." Inline style preview remains (user sees what they wanted), but no file write. |
+| `FILE_CHANGED` | Show warning toast: "Source file has changed. Re-select the element to refresh." Revert inline preview to avoid visual mismatch with code. |
+| `MAPPED_ELEMENT` | Show confirmation dialog: "This element is rendered in a loop. The change will apply to all {n} instances. Continue?" If confirmed, re-send the message with a `confirmed: true` flag. If declined, revert inline preview. |
+| `CONFLICTING_CLASS` | Show inline message listing the conflicting classes: "Found `p-4` in static args and `p-6` in conditional. Which should be modified?" with clickable options. |
+
+When `success: true`, no error handling needed — the inline preview was correct and HMR will confirm.
+
 ### CSS Specificity Conflict Detection
 
 After HMR re-acquisition, compare the element's computed style for the edited property against the expected value. If they differ, a non-Tailwind CSS rule is overriding the Tailwind class. Show warning toast: "Property may be overridden by another CSS rule." Does not attempt to fix — makes the user aware.
@@ -475,7 +541,21 @@ function resolveTailwindConfig(projectRoot: string): TailwindConfig
 **Detection:**
 1. Read `node_modules/tailwindcss/package.json` → major version
 2. v3: `require('tailwind.config.js')` → `resolveConfig()` → extract theme scales
-3. v4: Parse CSS file with `@theme` directives or use v4 JS API
+3. v4: Do NOT use v4's JS API (unstable between v4.0 and v4.1). Instead:
+   a. Find the CSS entry file containing `@theme` — search common locations:
+      `app/globals.css`, `src/index.css`, `src/globals.css`, `src/app.css`.
+      If not found, scan all CSS files in `src/` and `app/` for `@theme`.
+   b. Parse the `@theme` block — it's a simple CSS-like key-value format:
+      ```css
+      @theme {
+        --color-brand: #1a2b3c;
+        --spacing-18: 4.5rem;
+      }
+      ```
+   c. Extract custom tokens from the parsed `@theme` block.
+   d. Merge with Tailwind v4's default theme values (hardcoded snapshot of
+      the default spacing/color/fontSize scales — these rarely change between
+      v4 minor versions and can be updated manually).
 
 **Sent to browser** on WebSocket connection via `tailwindTokens` message. Browser merges with CSS custom properties read from live page.
 
