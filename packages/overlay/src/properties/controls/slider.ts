@@ -21,12 +21,8 @@ export function createSlider(
   slider.min = String(min);
   slider.max = String(max);
   slider.step = "1";
-  slider.style.cssText = `
-    flex:1;
-    cursor:pointer;
-    accent-color:${COLORS.accent};
-    height:4px;
-  `.trim().replace(/\n\s*/g, " ");
+  slider.className = "prop-slider";
+  slider.style.cssText = `flex:1;`;
 
   const valueDisplay = document.createElement("span");
   valueDisplay.style.cssText = `
@@ -44,7 +40,7 @@ export function createSlider(
 
   function cssToSlider(cssValue: string): number {
     const num = parseFloat(cssValue);
-    if (isNaN(num)) return min;
+    if (isNaN(num)) return isOpacity ? max : min;
     // opacity CSS is 0..1, slider is 0..100
     return isOpacity ? Math.round(num * 100) : num;
   }

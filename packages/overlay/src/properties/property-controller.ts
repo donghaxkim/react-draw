@@ -8,6 +8,9 @@ import { send } from "../bridge.js";
 import type { PropertyControl } from "./controls/types.js";
 import { pushUndoAction, type PropertyChangeRuntime } from "../canvas-state.js";
 
+// Display values that enable flex layout controls
+const FLEX_DISPLAYS = new Set(["flex", "inline-flex"]);
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -75,6 +78,22 @@ function destroyControls(): void {
     ctrl.destroy();
   }
   controls = [];
+}
+
+/**
+ * Re-renders sections (e.g., when display changes and flex controls need to appear/disappear).
+ */
+function rerenderSections(): void {
+  if (!state.selectedElement || !state.componentInfo) return;
+  destroyControls();
+  const { container, controls: newControls } = renderSections(
+    ALL_DESCRIPTORS,
+    state.currentValues,
+    preview,
+    commit,
+  );
+  controls = newControls;
+  sidebar.replaceContent(container);
 }
 
 function resetState(): void {
@@ -182,6 +201,29 @@ export function preview(key: string, cssValue: string): void {
     relatedPrefixes: desc.relatedPrefixes,
     originalValue: state.originalValues.get(key) || desc.defaultValue,
   });
+
+  // When display changes, re-render sections so flex controls appear/disappear
+  if (key === "display") {
+    rerenderSections();
+
+    // Show warning when element is hidden
+    if (cssValue === "none") {
+      const originalDisplay = state.originalValues.get("display") || "block";
+      sidebar.showWarning("Element hidden", "Restore", () => {
+        // Revert display to original value
+        if (state.selectedElement) {
+          (state.selectedElement.style as any).display = originalDisplay;
+        }
+        state.activeOverrides.delete("display");
+        state.currentValues.set("display", originalDisplay);
+        state.pendingBatch.delete("display");
+        rerenderSections();
+        sidebar.clearWarning();
+      });
+    } else {
+      sidebar.clearWarning();
+    }
+  }
 }
 
 /**

@@ -5,7 +5,7 @@ import { createSegmented } from "./controls/segmented.js";
 import { createColorSwatch } from "./controls/color-swatch.js";
 import { createSlider } from "./controls/slider.js";
 import { createBoxModel } from "./controls/box-model.js";
-import { COLORS, FONT_FAMILY, RADII } from "../design-tokens.js";
+import { COLORS, FONT_FAMILY, RADII, TRANSITIONS } from "../design-tokens.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -54,7 +54,7 @@ const SECTION_STYLES = `
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 12px;
+    padding: 10px 14px;
     background: ${COLORS.bgSecondary};
     cursor: pointer;
     user-select: none;
@@ -78,13 +78,56 @@ const SECTION_STYLES = `
     transform: rotate(-90deg);
   }
   .prop-section-body {
-    padding: 8px 12px 12px;
+    padding: 10px 14px 14px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
   .prop-section-body.collapsed {
     display: none;
+  }
+  .prop-input {
+    background: ${COLORS.bgTertiary};
+    border: 1px solid ${COLORS.border};
+    border-radius: ${RADII.xs};
+    padding: 4px 6px;
+    font-family: ${FONT_FAMILY};
+    font-size: 11px;
+    color: ${COLORS.textPrimary};
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color ${TRANSITIONS.fast}, box-shadow ${TRANSITIONS.fast};
+  }
+  .prop-input:hover {
+    border-color: ${COLORS.borderStrong};
+  }
+  .prop-input:focus {
+    border-color: ${COLORS.accent};
+    box-shadow: 0 0 0 2px ${COLORS.focusRing};
+  }
+  .prop-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 4px;
+    border-radius: 2px;
+    background: ${COLORS.bgTertiary};
+    outline: none;
+    cursor: pointer;
+  }
+  .prop-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: ${COLORS.accent};
+    border: 2px solid white;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    cursor: pointer;
+  }
+  .prop-slider:focus::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3px ${COLORS.focusRing};
   }
 `;
 
@@ -148,6 +191,17 @@ function splitCompound(
 }
 
 // ---------------------------------------------------------------------------
+// Flex-specific descriptor keys (only shown when display is flex/inline-flex)
+// ---------------------------------------------------------------------------
+
+const FLEX_ONLY_KEYS = new Set(["flexDirection", "justifyContent", "alignItems", "gap"]);
+
+function isFlexDisplay(currentValues: Map<string, string>): boolean {
+  const display = currentValues.get("display") ?? "";
+  return display === "flex" || display === "inline-flex";
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -169,6 +223,13 @@ export function renderSections(
   const grouped = groupDescriptors(descriptors);
 
   for (const [group, descs] of grouped) {
+    // Filter out flex-only descriptors when display is not flex/inline-flex
+    const filteredDescs = group === "layout" && !isFlexDisplay(currentValues)
+      ? descs.filter(d => !FLEX_ONLY_KEYS.has(d.key))
+      : descs;
+
+    if (filteredDescs.length === 0) continue;
+
     const section = document.createElement("div");
     section.className = "prop-section";
 
@@ -193,7 +254,7 @@ export function renderSections(
     section.appendChild(header);
 
     // Controls
-    const entries = splitCompound(descs);
+    const entries = splitCompound(filteredDescs);
     for (const entry of entries) {
       const factory = CONTROL_FACTORIES[entry.controlType];
       if (!factory) continue;

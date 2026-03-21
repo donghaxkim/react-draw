@@ -31,7 +31,7 @@ export function createSegmented(
     for (const { btn, value } of buttons) {
       const isActive = value === cssValue;
       btn.style.background = isActive ? COLORS.accent : "transparent";
-      btn.style.color = isActive ? "#ffffff" : COLORS.textSecondary;
+      btn.style.color = isActive ? COLORS.textOnAccent : COLORS.textSecondary;
     }
   }
 
@@ -43,7 +43,7 @@ export function createSegmented(
       justify-content:center;
       padding:2px 6px;
       border:none;
-      border-radius:4px;
+      border-radius:${RADII.xs};
       font-family:${FONT_FAMILY};
       font-size:10px;
       cursor:pointer;
