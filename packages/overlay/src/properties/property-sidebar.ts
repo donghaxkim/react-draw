@@ -104,7 +104,7 @@ function loadWidth(): number {
   } catch {
     // localStorage not available
   }
-  return DEFAULT_WIDTH;
+  return Math.min(DEFAULT_WIDTH, Math.floor(window.innerWidth * 0.22));
 }
 
 function saveWidth(width: number): void {

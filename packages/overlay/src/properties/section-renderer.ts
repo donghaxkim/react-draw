@@ -86,6 +86,26 @@ const SECTION_STYLES = `
   .prop-section-body.collapsed {
     display: none;
   }
+  .prop-control-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .prop-control-label {
+    width: 48px;
+    flex-shrink: 0;
+    font-size: 10px;
+    font-family: ${FONT_FAMILY};
+    color: ${COLORS.textTertiary};
+    text-transform: capitalize;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .prop-control-value {
+    flex: 1;
+    min-width: 0;
+  }
 `;
 
 // ---------------------------------------------------------------------------
@@ -199,7 +219,28 @@ export function renderSections(
       if (!factory) continue;
 
       const control = factory(entry.descriptors, currentValues, onPreview, onCommit);
-      body.appendChild(control.element);
+
+      // Compound controls (box-model) have their own layout — no label wrapper
+      if (entry.descriptors.length > 1 || entry.controlType === "box-model") {
+        body.appendChild(control.element);
+      } else {
+        const row = document.createElement("div");
+        row.className = "prop-control-row";
+
+        const label = document.createElement("span");
+        label.className = "prop-control-label";
+        label.textContent = entry.descriptors[0].label;
+        label.title = entry.descriptors[0].label;
+
+        const valueWrap = document.createElement("div");
+        valueWrap.className = "prop-control-value";
+        valueWrap.appendChild(control.element);
+
+        row.appendChild(label);
+        row.appendChild(valueWrap);
+        body.appendChild(row);
+      }
+
       allControls.push(control);
     }
 

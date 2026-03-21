@@ -7,6 +7,7 @@ import type { MergedTokenMap } from "./tailwind-resolver.js";
 import { send } from "../bridge.js";
 import type { PropertyControl } from "./controls/types.js";
 import { pushUndoAction, type PropertyChangeRuntime } from "../canvas-state.js";
+import { getFiberFromHostInstance, isCompositeFiber, getDisplayName } from "bippy";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -48,11 +49,61 @@ const observer = new MutationObserver(() => {
   if (state.selectedElement && !document.contains(state.selectedElement)) {
     clearTimeout(reacquireTimer);
     reacquireTimer = setTimeout(() => {
-      // For v1: just deselect. Full reacquisition is a later enhancement.
-      deselect();
-    }, 50);
+      reacquireElement();
+    }, 80);
   }
 });
+
+/**
+ * After HMR replaces the DOM, find the new element matching the stored
+ * elementIdentity by walking fibers to match componentName + source location.
+ * Re-inspects without slide animation if found; deselects if not.
+ */
+function reacquireElement(): void {
+  const identity = state.elementIdentity;
+  const info = state.componentInfo;
+  if (!identity || !info) {
+    deselect();
+    return;
+  }
+
+  // Find all elements with the same tag, then check fibers for source match
+  const candidates = document.querySelectorAll(identity.tagName);
+  let matched: HTMLElement | null = null;
+
+  for (const el of candidates) {
+    if (!(el instanceof HTMLElement)) continue;
+    try {
+      let fiber = getFiberFromHostInstance(el);
+      // Walk up fiber tree to find a composite fiber with matching source
+      while (fiber) {
+        if (isCompositeFiber(fiber)) {
+          const source = fiber._debugSource;
+          const name = getDisplayName(fiber);
+          if (
+            source &&
+            name === identity.componentName &&
+            source.fileName?.endsWith(identity.filePath) &&
+            source.lineNumber === identity.lineNumber
+          ) {
+            matched = el;
+            break;
+          }
+        }
+        fiber = fiber.return;
+      }
+    } catch {
+      // fiber walk may fail
+    }
+    if (matched) break;
+  }
+
+  if (matched) {
+    inspect(matched, info);
+  } else {
+    deselect();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers
