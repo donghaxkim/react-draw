@@ -233,19 +233,19 @@ const SHORTHAND_SPLITS: Record<
   },
   "rounded-t": {
     sides: ["rounded-tl", "rounded-tr"],
-    extractToken: (cls) => cls.replace(/^rounded-t-/, ""),
+    extractToken: (cls) => cls === "rounded-t" ? "DEFAULT" : cls.replace(/^rounded-t-/, ""),
   },
   "rounded-r": {
     sides: ["rounded-tr", "rounded-br"],
-    extractToken: (cls) => cls.replace(/^rounded-r-/, ""),
+    extractToken: (cls) => cls === "rounded-r" ? "DEFAULT" : cls.replace(/^rounded-r-/, ""),
   },
   "rounded-b": {
     sides: ["rounded-br", "rounded-bl"],
-    extractToken: (cls) => cls.replace(/^rounded-b-/, ""),
+    extractToken: (cls) => cls === "rounded-b" ? "DEFAULT" : cls.replace(/^rounded-b-/, ""),
   },
   "rounded-l": {
     sides: ["rounded-tl", "rounded-bl"],
-    extractToken: (cls) => cls.replace(/^rounded-l-/, ""),
+    extractToken: (cls) => cls === "rounded-l" ? "DEFAULT" : cls.replace(/^rounded-l-/, ""),
   },
 };
 
