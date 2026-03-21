@@ -1,5 +1,6 @@
 // packages/overlay/src/bridge.ts
 import type { ClientMessage, ServerMessage } from "@sketch-ui/shared";
+import { setCliTokens } from "./properties/tailwind-resolver.js";
 
 type MessageHandler = (msg: ServerMessage) => void;
 
@@ -30,6 +31,10 @@ export function connect(port: number): void {
   ws.onmessage = (event) => {
     try {
       const msg: ServerMessage = JSON.parse(event.data);
+      // Handle Tailwind token messages from CLI
+      if (msg.type === "tailwindTokens") {
+        setCliTokens(msg.tokens);
+      }
       messageHandlers.forEach((handler) => handler(msg));
     } catch {
       // Ignore malformed messages

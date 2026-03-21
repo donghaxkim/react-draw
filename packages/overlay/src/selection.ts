@@ -7,6 +7,7 @@ import { isInternalName, isFullPageElement, isValidElement } from "./utils/compo
 import { getElementsInArea } from "./utils/area-selection.js";
 import { COLORS, SHADOWS, RADII, TRANSITIONS, FONT_FAMILY } from "./design-tokens.js";
 import { setHoverTarget, setSelectionTarget } from "./highlight-canvas.js";
+import { inspect, deselect as deselectProperty, cancel as cancelProperty, hasActiveOverrides } from "./properties/property-controller.js";
 
 // Ensure bippy instrumentation is active so we can read fiber info
 if (!isInstrumentationActive()) {
@@ -387,6 +388,9 @@ async function selectElement(el: HTMLElement): Promise<void> {
       selectionLabel.innerHTML = `<span class="comp-name">${resolved.componentName}</span>${pathText ? `<span class="comp-path">${pathText}</span>` : ""}`;
     }
 
+    // Notify property controller of new selection
+    inspect(el, currentSelection);
+
     // Update action bar component detail
     updateComponentDetail({
       tagName: resolved.tagName,
@@ -475,6 +479,12 @@ function handleKeyDown(e: KeyboardEvent): void {
   if (!isActive) return;
 
   if (e.key === "Escape" && currentSelection) {
+    // Before clearing selection on Escape, check if property controller has active overrides
+    if (hasActiveOverrides()) {
+      cancelProperty();
+      e.preventDefault();
+      return; // Don't clear selection, just cancel the preview
+    }
     // Deselect (hierarchy navigation deferred — see spec notes)
     clearSelection();
     e.preventDefault();
@@ -546,6 +556,7 @@ function hideHoverOverlay(): void {
 }
 
 export function clearSelection(): void {
+  deselectProperty();
   currentSelection = null;
   selectedElement = null;
   setSelectionTarget(null);

@@ -1,6 +1,6 @@
 // packages/overlay/src/index.ts
 import { connect, disconnect } from "./bridge.js";
-import { mountToolbar, destroyToolbar, setOnEyeToggle, setOnGenerate, setOnCanvasUndo, updateEyeButton, updateGenerateButton, showToast } from "./toolbar.js";
+import { mountToolbar, destroyToolbar, setOnEyeToggle, setOnGenerate, setOnCanvasUndo, updateEyeButton, updateGenerateButton, showToast, getShadowRoot } from "./toolbar.js";
 import { initSelection, deactivateSelection } from "./selection.js";
 import { initHighlightCanvas, destroyHighlightCanvas } from "./highlight-canvas.js";
 import { initDrag, deactivateDrag } from "./drag.js";
@@ -16,6 +16,7 @@ import {
   canvasUndo, canUndo, resetCanvas, hasChanges, serializeAnnotations,
   getOriginalsHidden, setOriginalsHidden,
 } from "./canvas-state.js";
+import { initPropertyController } from "./properties/property-controller.js";
 import { activatePointer, deactivatePointer } from "./tools/pointer.js";
 import { grabHandler } from "./tools/grab.js";
 import { moveHandler, returnToMoveAfterSelect } from "./tools/move.js";
@@ -42,6 +43,12 @@ function init(): void {
 
   connect(wsPort);
   mountToolbar(close);
+
+  // Initialize property controller (requires Shadow DOM from mountToolbar)
+  const shadowRoot = getShadowRoot();
+  if (shadowRoot) {
+    initPropertyController(shadowRoot);
+  }
 
   // Phase 1 systems
   initSelection();
