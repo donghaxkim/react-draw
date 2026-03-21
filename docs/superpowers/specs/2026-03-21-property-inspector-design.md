@@ -113,7 +113,7 @@ The `compound` flag enables the box-model control: the section renderer collects
     tailwindToken: string | null; // "6" if maps to token, null if arbitrary
     relatedPrefixes?: string[];
     originalValue: string;        // previous CSS value for undo
-    framework: "tailwind" | "inline";
+    framework: "tailwind";        // v1 only supports Tailwind. "inline" deferred to v2.
   }
 | {
     type: "updateProperties";     // batch — single AST parse, single write
@@ -129,7 +129,7 @@ The `compound` flag enables the box-model control: the section renderer collects
       relatedPrefixes?: string[];
       originalValue: string;
     }>;
-    framework: "tailwind" | "inline";
+    framework: "tailwind";        // v1 only supports Tailwind. "inline" deferred to v2.
   }
 
 // New ServerMessage variants
@@ -142,20 +142,28 @@ The `value` is always the resolved CSS value. `tailwindToken` is the scale step 
 ### TailwindTokenMap
 
 ```typescript
+// Uses Record (not Map) because this is JSON-serialized over WebSocket.
+// The browser converts to Map internally for O(1) lookup after receiving.
 interface TailwindTokenMap {
-  spacing: Map<string, string>;          // "4" → "16px"
-  colors: Map<string, string>;           // "blue-500" → "#3b82f6"
-  fontSize: Map<string, string>;         // "lg" → "18px"
-  fontWeight: Map<string, string>;       // "bold" → "700"
-  borderRadius: Map<string, string>;     // "lg" → "8px"
-  opacity: Map<string, string>;          // "50" → "0.5"
-  spacingReverse: Map<string, string>;   // "16px" → "4"
-  colorsReverse: Map<string, string>;    // "#3b82f6" → "blue-500"
-  fontSizeReverse: Map<string, string>;
-  fontWeightReverse: Map<string, string>;
-  borderRadiusReverse: Map<string, string>;
-  opacityReverse: Map<string, string>;
+  spacing: Record<string, string>;          // "4" → "16px"
+  colors: Record<string, string>;           // "blue-500" → "#3b82f6"
+  fontSize: Record<string, string>;         // "lg" → "18px"
+  fontWeight: Record<string, string>;       // "bold" → "700"
+  borderRadius: Record<string, string>;     // "lg" → "8px"
+  opacity: Record<string, string>;          // "50" → "0.5"
+  spacingReverse: Record<string, string>;   // "16px" → "4"
+  colorsReverse: Record<string, string>;    // "#3b82f6" → "blue-500"
+  fontSizeReverse: Record<string, string>;
+  fontWeightReverse: Record<string, string>;
+  borderRadiusReverse: Record<string, string>;
+  opacityReverse: Record<string, string>;
 }
+
+// Note on tailwindScale naming: descriptors use camelCase keys matching the
+// TailwindTokenMap field names (e.g. tailwindScale: "fontSize", not "font-size").
+// This differs from cssProperty which uses kebab-case. The mapping:
+//   cssProperty: "font-size"  → tailwindScale: "fontSize"
+//   cssProperty: "border-radius" → tailwindScale: "borderRadius"
 ```
 
 Browser reads CSS custom properties from live page (fast, works for v3 and v4). CLI sends the full resolved config on connection via `tailwindTokens` message. Browser merges both sources — CLI tokens include project-specific extensions not on the current page.
@@ -169,7 +177,7 @@ Browser reads CSS custom properties from live page (fast, works for v3 and v4). 
 ```typescript
 interface PropertyControllerState {
   selectedElement: HTMLElement | null;
-  componentRef: ComponentRef | null;
+  componentInfo: ComponentInfo | null;  // ComponentInfo (not ComponentRef) — has columnNumber
   elementIdentity: ElementIdentity | null;
   currentValues: Map<string, string>;      // key → resolved CSS value
   originalValues: Map<string, string>;     // key → value at selection time
@@ -200,7 +208,8 @@ interface PendingUpdate {
 
 ```
 1. INSPECT — element selected
-   controller.inspect(element, componentRef)
+   controller.inspect(element, componentInfo)
+   → receives ComponentInfo (which includes columnNumber), not ComponentRef
    → stores ElementIdentity for HMR re-acquisition
    → reads getComputedStyle for all ~30 descriptors → currentValues + originalValues
    → renders sidebar via section-renderer
@@ -268,7 +277,7 @@ Undo via Ctrl+Z still works (undo stack captured the change).
 ### Container
 
 - Right edge of viewport, full height, overlays page content (does not push it)
-- **Resizable**: drag handle on left edge. 260px min, 300px max. Default: `min(280, viewportWidth * 0.22)`
+- **Resizable**: drag handle on left edge. 260px min, 380px max. Default: `min(280, viewportWidth * 0.22)`
 - Width persisted to `localStorage`
 - Semi-transparent backdrop or solid white with shadow
 - Slides in on selection, slides out on deselection (CSS transform transition)
@@ -353,7 +362,10 @@ function updateClassName(
 **Algorithm:**
 
 1. Parse file with jscodeshift (same parser detection as reorderComponent)
-2. Find JSX element at lineNumber:columnNumber
+2. Find JSX element at lineNumber:columnNumber. Column numbers use jscodeshift's
+   0-indexed convention (`loc.start.column`). The overlay converts React's 1-indexed
+   `columnNumber` (from source maps) by subtracting 1 before sending the message.
+   When multiple JSX elements share the same line, columnNumber disambiguates.
 3. Find className attribute
    - If no className exists, create one with the new class(es)
    - String literal: modify directly
@@ -390,8 +402,34 @@ const SHORTHAND_SPLITS: Record<string, Record<string, string[]>> = {
   "pr": { "px": ["pl-{v}", "pr-{new}"], "p": ["pl-{v}", "pr-{new}", "pt-{v}", "pb-{v}"] },
   "pt": { "py": ["pt-{new}", "pb-{v}"], "p": ["pl-{v}", "pr-{v}", "pt-{new}", "pb-{v}"] },
   "pb": { "py": ["pt-{v}", "pb-{new}"], "p": ["pl-{v}", "pr-{v}", "pt-{v}", "pb-{new}"] },
-  // Same pattern for margin (ml/mr/mt/mb vs mx/my/m)
-  // Same for border-radius (rounded-tl/tr/br/bl vs rounded)
+  // Margin — same pattern as padding
+  "ml": { "mx": ["ml-{new}", "mr-{v}"], "m": ["ml-{new}", "mr-{v}", "mt-{v}", "mb-{v}"] },
+  "mr": { "mx": ["ml-{v}", "mr-{new}"], "m": ["ml-{v}", "mr-{new}", "mt-{v}", "mb-{v}"] },
+  "mt": { "my": ["mt-{new}", "mb-{v}"], "m": ["ml-{v}", "mr-{v}", "mt-{new}", "mb-{v}"] },
+  "mb": { "my": ["mt-{v}", "mb-{new}"], "m": ["ml-{v}", "mr-{v}", "mt-{v}", "mb-{new}"] },
+
+  // Border radius — three-level hierarchy:
+  //   rounded (all) → rounded-t/r/b/l (side pairs) → rounded-tl/tr/br/bl (corners)
+  // Editing a corner must split both the full shorthand AND the side shorthand.
+  "rounded-tl": {
+    "rounded-t": ["rounded-tl-{new}", "rounded-tr-{v}"],
+    "rounded": ["rounded-tl-{new}", "rounded-tr-{v}", "rounded-br-{v}", "rounded-bl-{v}"],
+  },
+  "rounded-tr": {
+    "rounded-t": ["rounded-tl-{v}", "rounded-tr-{new}"],
+    "rounded-r": ["rounded-tr-{new}", "rounded-br-{v}"],
+    "rounded": ["rounded-tl-{v}", "rounded-tr-{new}", "rounded-br-{v}", "rounded-bl-{v}"],
+  },
+  "rounded-br": {
+    "rounded-b": ["rounded-br-{new}", "rounded-bl-{v}"],
+    "rounded-r": ["rounded-tr-{v}", "rounded-br-{new}"],
+    "rounded": ["rounded-tl-{v}", "rounded-tr-{v}", "rounded-br-{new}", "rounded-bl-{v}"],
+  },
+  "rounded-bl": {
+    "rounded-b": ["rounded-bl-{new}", "rounded-br-{v}"],
+    "rounded-l": ["rounded-tl-{v}", "rounded-bl-{new}"],
+    "rounded": ["rounded-tl-{v}", "rounded-tr-{v}", "rounded-br-{v}", "rounded-bl-{new}"],
+  },
 };
 ```
 
@@ -483,6 +521,8 @@ After re-acquisition, compare computed style of edited properties to expected va
 
 Canvas undo reverts inline styles on the element and sends a file undo to the CLI (same `undo` message type, CLI restores previous file content from its undo stack).
 
+**LIFO constraint:** The CLI undo stack is a simple LIFO stack shared across all operations (reorder, property changes). Canvas property undo can only revert the CLI file change if it corresponds to the most recent CLI undo entry. If the user makes a property change, then a reorder, then tries to undo the property change, the canvas undo reverts the inline styles (visual) but does NOT send a file undo — because `undoStack.pop()` would undo the reorder, not the property change. In this case, the user sees the visual revert but the source file retains the property change until they undo the reorder first. A targeted undo mechanism is deferred to v2.
+
 ### Cancel Path
 
 Escape during active preview → revert all `activeOverrides` to `originalValues` inline styles. No file write, no undo entry. Element snaps back to original appearance.
@@ -493,7 +533,7 @@ Escape during active preview → revert all `activeOverrides` to `originalValues
 
 ### Existing Codebase
 
-1. **Pointer tool** — after `resolveComponentAtPoint()`, calls `controller.inspect()`. Sidebar appears alongside the existing contextual label
+1. **Pointer tool** — after `resolveComponentAtPoint()`, calls `controller.inspect(element, componentInfo)` with the full `ComponentInfo` (which includes `columnNumber`). Sidebar appears alongside the existing contextual label
 2. **Canvas state** — new `CanvasUndoAction` type for property changes
 3. **WebSocket** — new cases in `server.ts` `processQueue` switch
 4. **Color picker** — reused by color-swatch control, presets replaced with project Tailwind palette
