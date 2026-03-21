@@ -32,6 +32,35 @@ export interface SnapPoint {
 }
 
 // ---------------------------------------------------------------------------
+// Color normalization
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalizes any CSS color value to a hex string using the canvas 2D context.
+ * This ensures that values like `oklch(0.7 0.15 230)` are converted to the
+ * same hex representation that `getComputedStyle` returns for elements, making
+ * reverse-map lookups work regardless of the original color format.
+ */
+function normalizeColorToHex(cssValue: string): string {
+  const v = cssValue.trim().toLowerCase();
+  if (v === "transparent") return "transparent";
+  if (/^#[0-9a-fA-F]{3,8}$/.test(v)) return v;
+  const ctx = document.createElement("canvas").getContext("2d")!;
+  ctx.fillStyle = "#000000";
+  ctx.fillStyle = v;
+  const result = ctx.fillStyle;
+  if (result.startsWith("#")) return result;
+  const m = result.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (m) {
+    const r = parseInt(m[1], 10);
+    const g = parseInt(m[2], 10);
+    const b = parseInt(m[3], 10);
+    return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+  }
+  return cssValue; // fallback to original
+}
+
+// ---------------------------------------------------------------------------
 // CSS custom property reading
 // ---------------------------------------------------------------------------
 
@@ -103,7 +132,9 @@ export function readCSSCustomProperties(): Partial<TailwindTokenMap> {
     // --color-{token}
     const colorMatch = prop.match(/^--color-(.+)$/);
     if (colorMatch) {
-      addToken(colors, colorsReverse, colorMatch[1], value);
+      const token = colorMatch[1];
+      colors[token] = value;
+      colorsReverse[normalizeColorToHex(value)] = token;
       continue;
     }
 

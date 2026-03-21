@@ -27,19 +27,8 @@ export function createColorSwatch(
   const input = document.createElement("input");
   input.type = "text";
   input.placeholder = "#rrggbb";
-  input.style.cssText = `
-    flex:1;
-    min-width:0;
-    background:${COLORS.bgTertiary};
-    border:1px solid ${COLORS.border};
-    border-radius:4px;
-    padding:2px 5px;
-    font-family:${FONT_FAMILY};
-    font-size:11px;
-    color:${COLORS.textPrimary};
-    outline:none;
-    box-sizing:border-box;
-  `.trim().replace(/\n\s*/g, " ");
+  input.className = "prop-input";
+  input.style.cssText = `flex:1; min-width:0;`;
 
   container.appendChild(swatch);
   container.appendChild(input);
@@ -47,31 +36,35 @@ export function createColorSwatch(
   let currentValue = values.get(descriptor.key) ?? descriptor.defaultValue;
   let pickerOpen = false;
 
-  function normalizeHex(value: string): string {
-    const trimmed = value.trim();
-    if (/^[0-9a-fA-F]{3,8}$/.test(trimmed)) {
-      return `#${trimmed}`;
-    }
-    return trimmed;
-  }
-
   function cssColorToHex(cssValue: string): string {
-    // Convert rgb(r, g, b) / rgba(r, g, b, a) to hex
-    const rgbMatch = cssValue.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
-    if (rgbMatch) {
-      const r = parseInt(rgbMatch[1], 10);
-      const g = parseInt(rgbMatch[2], 10);
-      const b = parseInt(rgbMatch[3], 10);
+    const v = cssValue.trim().toLowerCase();
+    if (v === "transparent") return "transparent";
+    if (v === "inherit" || v === "currentcolor" || v === "unset") return "#000000";
+    if (/^#[0-9a-fA-F]{3,8}$/.test(v)) return v;
+    // Canvas normalization — handles rgb(), hsl(), named colors, space syntax
+    const ctx = document.createElement("canvas").getContext("2d")!;
+    ctx.fillStyle = "#000000";
+    ctx.fillStyle = v;
+    const result = ctx.fillStyle;
+    if (result.startsWith("#")) return result;
+    const m = result.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (m) {
+      const r = parseInt(m[1], 10);
+      const g = parseInt(m[2], 10);
+      const b = parseInt(m[3], 10);
       return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
     }
-    if (/^#[0-9a-fA-F]{3,8}$/.test(cssValue)) return cssValue;
     return "#000000";
   }
 
   function updateDisplay(cssValue: string): void {
     currentValue = cssValue;
     input.value = cssValue;
-    swatch.style.background = cssValue;
+    if (cssValue === "transparent") {
+      swatch.style.background = `repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 0 0 / 10px 10px`;
+    } else {
+      swatch.style.background = cssValue;
+    }
   }
 
   function commitValue(): void {
@@ -81,7 +74,7 @@ export function createColorSwatch(
       updateDisplay(currentValue);
       return;
     }
-    const normalized = normalizeHex(raw);
+    const normalized = cssColorToHex(raw);
     updateDisplay(normalized);
     onPreview(descriptor.key, normalized);
     onCommit();
@@ -128,8 +121,9 @@ export function createColorSwatch(
   });
 
   input.addEventListener("input", () => {
+    // Live preview while typing if the value looks like a valid color
     const raw = input.value.trim();
-    const normalized = normalizeHex(raw);
+    const normalized = cssColorToHex(raw);
     swatch.style.background = normalized;
   });
 

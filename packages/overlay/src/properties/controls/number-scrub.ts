@@ -3,6 +3,8 @@ import type { PropertyControl, OnPreview, OnCommit } from "./types.js";
 import { getSnapPoints } from "../tailwind-resolver.js";
 import { COLORS, FONT_FAMILY } from "../../design-tokens.js";
 
+const VALID_KEYWORDS = new Set(["auto", "none", "normal", "inherit", "initial"]);
+
 export function createNumberScrub(
   descriptors: PropertyDescriptor[],
   values: Map<string, string>,
@@ -17,19 +19,8 @@ export function createNumberScrub(
 
   const input = document.createElement("input");
   input.type = "text";
-  input.style.cssText = `
-    width:60px;
-    background:${COLORS.bgTertiary};
-    border:1px solid ${COLORS.border};
-    border-radius:4px;
-    padding:2px 5px;
-    font-family:${FONT_FAMILY};
-    font-size:11px;
-    color:${COLORS.textPrimary};
-    cursor:ew-resize;
-    outline:none;
-    box-sizing:border-box;
-  `.trim().replace(/\n\s*/g, " ");
+  input.className = "prop-input";
+  input.style.cssText = `width:60px; cursor:ew-resize;`;
 
   const tokenLabel = document.createElement("span");
   tokenLabel.style.cssText = `font-size:10px; color:${COLORS.textSecondary}; font-family:${FONT_FAMILY};`;
@@ -119,7 +110,8 @@ export function createNumberScrub(
   const onMouseMove = (e: MouseEvent): void => {
     if (!isDragging) return;
     const delta = (e.clientX - startX) * 0.5;
-    const targetValue = Math.max(descriptor.min ?? 0, startValue + delta);
+    const minValue = descriptor.min !== undefined ? descriptor.min : -Infinity;
+    const targetValue = Math.max(minValue, startValue + delta);
     const { cssValue } = findNearestSnapPoint(targetValue);
     currentValues.set(descriptor.key, cssValue);
     updateDisplay(cssValue);
@@ -156,12 +148,13 @@ export function createNumberScrub(
     const raw = input.value.trim();
     const num = parseFloat(raw);
     if (!isNaN(num)) {
-      const cssValue = raw.includes("px") || raw.includes("rem") ? raw : `${num}px`;
+      const unitMatch = raw.match(/(px|rem|em|%|vw|vh|ch)$/);
+      const cssValue = unitMatch ? raw : `${num}px`;
       currentValues.set(descriptor.key, cssValue);
       updateDisplay(cssValue);
       onPreview(descriptor.key, cssValue);
       onCommit();
-    } else if (raw === "auto" || raw === "none") {
+    } else if (VALID_KEYWORDS.has(raw)) {
       currentValues.set(descriptor.key, raw);
       updateDisplay(raw);
       onPreview(descriptor.key, raw);
@@ -179,7 +172,8 @@ export function createNumberScrub(
       e.preventDefault();
       const step = getScaleStep();
       const current = parseFloat(getCurrentCssValue()) || 0;
-      const next = e.key === "ArrowUp" ? current + step : Math.max(descriptor.min ?? 0, current - step);
+      const minValue = descriptor.min !== undefined ? descriptor.min : -Infinity;
+      const next = e.key === "ArrowUp" ? current + step : Math.max(minValue, current - step);
       const { cssValue } = findNearestSnapPoint(next);
       currentValues.set(descriptor.key, cssValue);
       updateDisplay(cssValue);
