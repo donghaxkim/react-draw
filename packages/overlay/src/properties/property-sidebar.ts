@@ -52,6 +52,32 @@ const SIDEBAR_STYLES = `
     padding: 12px 16px;
     border-bottom: 1px solid ${COLORS.border};
     flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .prop-sidebar-header-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .prop-sidebar-close {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: ${COLORS.textTertiary};
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: ${RADII.sm};
+  }
+  .prop-sidebar-close:hover {
+    background: ${COLORS.bgTertiary};
+    color: ${COLORS.textPrimary};
   }
   .prop-sidebar-component-name {
     font-size: 13px;
@@ -119,7 +145,7 @@ function saveWidth(width: number): void {
 // Public API
 // ---------------------------------------------------------------------------
 
-export function createSidebar(shadowRoot: ShadowRoot): {
+export function createSidebar(shadowRoot: ShadowRoot, onClose?: () => void): {
   show: (componentName: string, filePath: string, lineNumber: number, content: HTMLElement) => void;
   hide: () => void;
   isVisible: () => boolean;
@@ -144,14 +170,25 @@ export function createSidebar(shadowRoot: ShadowRoot): {
   const header = document.createElement("div");
   header.className = "prop-sidebar-header";
 
+  const headerInfo = document.createElement("div");
+  headerInfo.className = "prop-sidebar-header-info";
+
   const componentNameEl = document.createElement("div");
   componentNameEl.className = "prop-sidebar-component-name";
 
   const filePathEl = document.createElement("div");
   filePathEl.className = "prop-sidebar-file-path";
 
-  header.appendChild(componentNameEl);
-  header.appendChild(filePathEl);
+  headerInfo.appendChild(componentNameEl);
+  headerInfo.appendChild(filePathEl);
+
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "prop-sidebar-close";
+  closeBtn.title = "Close panel";
+  closeBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/></svg>`;
+
+  header.appendChild(headerInfo);
+  header.appendChild(closeBtn);
   sidebar.appendChild(header);
 
   // Scrollable content area
@@ -199,6 +236,12 @@ export function createSidebar(shadowRoot: ShadowRoot): {
   sidebar.addEventListener("mousedown", (e) => e.stopPropagation());
   sidebar.addEventListener("click", (e) => e.stopPropagation());
   sidebar.addEventListener("mouseup", (e) => e.stopPropagation());
+
+  // Close button
+  closeBtn.addEventListener("click", () => {
+    hide();
+    if (onClose) onClose();
+  });
 
   // --- Public methods ---
 
