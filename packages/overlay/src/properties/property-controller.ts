@@ -6,6 +6,7 @@ import { getTokenMap, resolveTokenForValue } from "./tailwind-resolver.js";
 import type { MergedTokenMap } from "./tailwind-resolver.js";
 import { send } from "../bridge.js";
 import type { PropertyControl } from "./controls/types.js";
+import { pushUndoAction, type PropertyChangeRuntime } from "../canvas-state.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -161,9 +162,15 @@ export function preview(key: string, cssValue: string): void {
   const tokens = getTokenMap();
   const reverseScaleKey = (desc.tailwindScale + "Reverse") as keyof MergedTokenMap;
   const reverseMap = tokens[reverseScaleKey] as Map<string, string> | undefined;
-  const tailwindToken = reverseMap
-    ? resolveTokenForValue(cssValue, reverseMap)
-    : null;
+  let tailwindToken = reverseMap ? resolveTokenForValue(cssValue, reverseMap) : null;
+
+  // For enum properties with enumValues, use the tailwindValue directly
+  if (!tailwindToken && desc.enumValues) {
+    const enumMatch = desc.enumValues.find(e => e.value === cssValue);
+    if (enumMatch) {
+      tailwindToken = enumMatch.tailwindValue;
+    }
+  }
 
   // Add to pending batch
   state.pendingBatch.set(key, {
@@ -190,6 +197,7 @@ export function commit(): void {
 
   if (state.pendingBatch.size === 1) {
     const update = [...state.pendingBatch.values()][0];
+    const desc = ALL_DESCRIPTORS.find(d => d.key === update.property);
     send({
       type: "updateProperty",
       filePath,
@@ -197,6 +205,8 @@ export function commit(): void {
       columnNumber,
       ...update,
       framework: "tailwind",
+      classPattern: desc?.classPattern,
+      standalone: desc?.standalone,
     });
   } else {
     send({
@@ -204,9 +214,30 @@ export function commit(): void {
       filePath,
       lineNumber,
       columnNumber,
-      updates: [...state.pendingBatch.values()],
+      updates: [...state.pendingBatch.values()].map(u => {
+        const desc = ALL_DESCRIPTORS.find(d => d.key === u.property);
+        return {
+          ...u,
+          classPattern: desc?.classPattern,
+          standalone: desc?.standalone,
+        };
+      }),
       framework: "tailwind",
     });
+  }
+
+  // Push to canvas undo stack
+  if (state.selectedElement && state.elementIdentity) {
+    pushUndoAction({
+      type: "propertyChange",
+      elementIdentity: state.elementIdentity,
+      element: state.selectedElement,
+      overrides: [...state.pendingBatch.values()].map(u => ({
+        cssProperty: u.cssProperty,
+        previousValue: u.originalValue,
+        newValue: u.value,
+      })),
+    } as PropertyChangeRuntime);
   }
 
   // Update originalValues to new values

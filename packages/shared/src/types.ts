@@ -23,6 +23,8 @@ export type ClientMessage =
       relatedPrefixes?: string[];
       originalValue: string;
       framework: "tailwind";
+      classPattern?: string;
+      standalone?: boolean;
     }
   | {
       type: "updateProperties";
@@ -37,6 +39,8 @@ export type ClientMessage =
         tailwindToken: string | null;
         relatedPrefixes?: string[];
         originalValue: string;
+        classPattern?: string;
+        standalone?: boolean;
       }>;
       framework: "tailwind";
     };

@@ -98,6 +98,8 @@ export function createSketchServer(port: number): SketchServer {
               tailwindToken: msg.tailwindToken,
               value: msg.value,
               relatedPrefixes: msg.relatedPrefixes,
+              classPattern: msg.classPattern,
+              standalone: msg.standalone,
             }]);
             fs.writeFileSync(msg.filePath, newSource, "utf-8");
             send(ws, { type: "updatePropertyComplete", success: true });
@@ -125,6 +127,8 @@ export function createSketchServer(port: number): SketchServer {
                 tailwindToken: u.tailwindToken,
                 value: u.value,
                 relatedPrefixes: u.relatedPrefixes,
+                classPattern: u.classPattern,
+                standalone: u.standalone,
               }))
             );
             fs.writeFileSync(msg.filePath, newSource, "utf-8");
