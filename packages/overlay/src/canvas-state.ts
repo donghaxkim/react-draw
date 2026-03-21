@@ -214,6 +214,17 @@ export function resetCanvas(): void {
       }
     }
   }
+  // Revert committed property overrides
+  for (const action of undoStack) {
+    if (action.type === "propertyChange") {
+      const propAction = action as PropertyChangeRuntime;
+      if (propAction.element && document.contains(propAction.element)) {
+        for (const override of propAction.overrides) {
+          (propAction.element.style as any)[override.cssProperty] = override.previousValue;
+        }
+      }
+    }
+  }
   ghosts = new Map();
   annotations = [];
   undoStack = [];

@@ -1,7 +1,7 @@
 // packages/overlay/src/index.ts
 import { connect, disconnect } from "./bridge.js";
 import { mountToolbar, destroyToolbar, setOnEyeToggle, setOnGenerate, setOnCanvasUndo, updateEyeButton, updateGenerateButton, showToast, getShadowRoot } from "./toolbar.js";
-import { initSelection, deactivateSelection } from "./selection.js";
+import { initSelection, deactivateSelection, clearSelection } from "./selection.js";
 import { initHighlightCanvas, destroyHighlightCanvas } from "./highlight-canvas.js";
 import { initDrag, deactivateDrag } from "./drag.js";
 import { initAnnotationLayer, destroyAnnotationLayer, clearAnnotationLayer, removeAnnotationElement } from "./annotation-layer.js";
@@ -132,6 +132,7 @@ function init(): void {
 
   // Clear All
   setOnClearAll(() => {
+    clearSelection();
     clearAnnotationLayer();
     clearLassoSelection();
     resetCanvas();
