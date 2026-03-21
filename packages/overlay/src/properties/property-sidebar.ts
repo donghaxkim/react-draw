@@ -97,6 +97,38 @@ const SIDEBAR_STYLES = `
     direction: rtl;
     text-align: left;
   }
+  .prop-sidebar-warning {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: ${COLORS.dangerSoft};
+    border-bottom: 1px solid ${COLORS.danger};
+    font-family: ${FONT_FAMILY};
+    font-size: 11px;
+    color: ${COLORS.danger};
+    flex-shrink: 0;
+  }
+  .prop-sidebar-warning-text {
+    flex: 1;
+    font-weight: 500;
+  }
+  .prop-sidebar-warning-btn {
+    border: 1px solid ${COLORS.danger};
+    background: none;
+    color: ${COLORS.danger};
+    font-family: ${FONT_FAMILY};
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: ${RADII.xs};
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .prop-sidebar-warning-btn:hover {
+    background: ${COLORS.danger};
+    color: #ffffff;
+  }
   .prop-sidebar-content {
     flex: 1;
     overflow-y: auto;
@@ -150,6 +182,9 @@ export function createSidebar(shadowRoot: ShadowRoot, onClose?: () => void): {
   hide: () => void;
   isVisible: () => boolean;
   getElement: () => HTMLElement;
+  replaceContent: (contentEl: HTMLElement) => void;
+  showWarning: (message: string, actionLabel: string, onAction: () => void) => void;
+  clearWarning: () => void;
 } {
   // Inject styles
   const style = document.createElement("style");
@@ -190,6 +225,12 @@ export function createSidebar(shadowRoot: ShadowRoot, onClose?: () => void): {
   header.appendChild(headerInfo);
   header.appendChild(closeBtn);
   sidebar.appendChild(header);
+
+  // Warning banner (hidden by default)
+  const warningBanner = document.createElement("div");
+  warningBanner.className = "prop-sidebar-warning";
+  warningBanner.style.display = "none";
+  sidebar.appendChild(warningBanner);
 
   // Scrollable content area
   const content = document.createElement("div");
@@ -275,10 +316,40 @@ export function createSidebar(shadowRoot: ShadowRoot, onClose?: () => void): {
     sidebar.classList.remove("visible");
   }
 
+  function replaceContent(contentEl: HTMLElement): void {
+    content.innerHTML = "";
+    content.appendChild(contentEl);
+  }
+
+  function showWarning(message: string, actionLabel: string, onAction: () => void): void {
+    warningBanner.innerHTML = "";
+    const text = document.createElement("span");
+    text.className = "prop-sidebar-warning-text";
+    text.textContent = message;
+    const btn = document.createElement("button");
+    btn.className = "prop-sidebar-warning-btn";
+    btn.textContent = actionLabel;
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onAction();
+    });
+    warningBanner.appendChild(text);
+    warningBanner.appendChild(btn);
+    warningBanner.style.display = "flex";
+  }
+
+  function clearWarning(): void {
+    warningBanner.style.display = "none";
+    warningBanner.innerHTML = "";
+  }
+
   return {
     show,
     hide,
     isVisible: () => visible,
     getElement: () => sidebar,
+    replaceContent,
+    showWarning,
+    clearWarning,
   };
 }

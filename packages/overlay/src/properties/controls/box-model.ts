@@ -70,8 +70,8 @@ export function createBoxModel(
   // Outer margin box
   const marginBox = document.createElement("div");
   marginBox.style.cssText = `
-    background:rgba(255,200,100,0.15);
-    border:1px dashed rgba(200,150,0,0.4);
+    background:${COLORS.marginBoxBg};
+    border:1px dashed ${COLORS.marginBoxBorder};
     border-radius:${RADII.sm};
     padding:10px;
     position:relative;
@@ -80,8 +80,8 @@ export function createBoxModel(
   // Padding box
   const paddingBox = document.createElement("div");
   paddingBox.style.cssText = `
-    background:rgba(100,180,255,0.12);
-    border:1px dashed rgba(50,120,200,0.35);
+    background:${COLORS.paddingBoxBg};
+    border:1px dashed ${COLORS.paddingBoxBorder};
     border-radius:${RADII.sm};
     padding:8px;
     position:relative;
@@ -157,22 +157,8 @@ export function createBoxModel(
   // -----------------------------------------------------------------------
   const editInput = document.createElement("input");
   editInput.type = "text";
-  editInput.style.cssText = `
-    width:40px;
-    background:${COLORS.bgTertiary};
-    border:1px solid ${COLORS.accent};
-    border-radius:3px;
-    padding:1px 3px;
-    font-family:${FONT_FAMILY};
-    font-size:10px;
-    color:${COLORS.textPrimary};
-    outline:none;
-    box-sizing:border-box;
-    text-align:center;
-    display:none;
-    position:absolute;
-    z-index:10;
-  `.trim().replace(/\n\s*/g, " ");
+  editInput.className = "prop-input";
+  editInput.style.cssText = `width:40px; text-align:center; display:none; position:absolute; z-index:10;`;
 
   root.appendChild(editInput);
 
@@ -192,12 +178,20 @@ export function createBoxModel(
     const cssVal = currentValues.get(descriptor.key) ?? descriptor.defaultValue;
     editInput.value = formatValue(cssVal);
 
-    // Position input over the span (account for scroll offset of ancestors)
-    const spanRect = span.getBoundingClientRect();
-    const rootRect = root.getBoundingClientRect();
+    // Walk up offset parents to get position relative to root (scroll-independent)
+    let offsetLeft = 0;
+    let offsetTop = 0;
+    let el: HTMLElement | null = span;
+    while (el && el !== root) {
+      offsetLeft += el.offsetLeft;
+      offsetTop += el.offsetTop;
+      el = el.offsetParent as HTMLElement | null;
+    }
+
     editInput.style.display = "block";
-    editInput.style.left = `${spanRect.left - rootRect.left + root.scrollLeft}px`;
-    editInput.style.top = `${spanRect.top - rootRect.top + root.scrollTop}px`;
+    editInput.style.left = `${offsetLeft}px`;
+    editInput.style.top = `${offsetTop}px`;
+    const spanRect = span.getBoundingClientRect();
     editInput.style.width = `${Math.max(40, spanRect.width + 10)}px`;
 
     editInput.focus();
@@ -212,9 +206,11 @@ export function createBoxModel(
 
     let cssValue: string;
     const num = parseFloat(raw);
+    const VALID_KEYWORDS = new Set(["auto", "none", "normal", "inherit", "initial", "0"]);
     if (!isNaN(num)) {
-      cssValue = raw.includes("px") || raw.includes("rem") ? raw : `${num}px`;
-    } else if (raw === "auto" || raw === "0") {
+      const unitMatch = raw.match(/(px|rem|em|%|vw|vh|ch)$/);
+      cssValue = unitMatch ? raw : `${num}px`;
+    } else if (VALID_KEYWORDS.has(raw)) {
       cssValue = raw;
     } else {
       // Revert to current

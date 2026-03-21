@@ -17,6 +17,12 @@ export const COLORS = {
   accentMedium: "rgba(162,89,255,0.15)",
   danger: "#e5484d",
   dangerSoft: "rgba(229,72,77,0.08)",
+  textOnAccent: "#ffffff",
+  marginBoxBg: "rgba(255,200,100,0.15)",
+  marginBoxBorder: "rgba(200,150,0,0.4)",
+  paddingBoxBg: "rgba(100,180,255,0.12)",
+  paddingBoxBorder: "rgba(50,120,200,0.35)",
+  focusRing: "rgba(162,89,255,0.25)",
 } as const;
 
 // --- Shadows ---
@@ -28,6 +34,7 @@ export const SHADOWS = {
 
 // --- Border Radius ---
 export const RADII = {
+  xs: "4px",
   sm: "6px",
   md: "10px",
   lg: "14px",
