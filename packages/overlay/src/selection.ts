@@ -249,41 +249,22 @@ function handleMouseDown(e: MouseEvent): void {
   e.stopPropagation();
 
   const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement;
-  if (!el || !isValidElement(el)) return;
+  if (!el || !isValidElement(el)) {
+    // Clicked on empty space or invalid element → deselect
+    clearSelection();
+    return;
+  }
 
   mouseDownPos = { x: e.clientX, y: e.clientY };
   mouseDownElement = el;
 
-  // Decide: if clicking on the currently selected element → pending drag
-  // Otherwise → selection/marquee mode
-  if (currentSelection && selectedElement && selectedElement.contains(el)) {
-    mode = "pending-drag"; // Will become "drag" if moved > 5px, or re-select child on click
-  } else {
-    mode = "pending"; // Will become "marquee" if dragged > 10px, or "click" on mouseup
-  }
+  // Always use "pending" mode — clicking selects, dragging does marquee.
+  // No drag-to-reorder in pointer mode.
+  mode = "pending";
 }
 
 function handleMouseMove(e: MouseEvent): void {
   if (!isActive) return;
-
-  if (mode === "drag") {
-    // Delegate to drag system
-    if (onDragMoveCallback) onDragMoveCallback(e);
-    return;
-  }
-
-  if (mode === "pending-drag" && mouseDownPos) {
-    const dx = Math.abs(e.clientX - mouseDownPos.x);
-    const dy = Math.abs(e.clientY - mouseDownPos.y);
-    if (dx > 5 || dy > 5) {
-      mode = "drag";
-      // Now start the actual drag
-      if (onDragStartCallback && selectedElement && currentSelection) {
-        onDragStartCallback(e, selectedElement, currentSelection);
-      }
-    }
-    return;
-  }
 
   if (mode === "pending" && mouseDownPos) {
     const dx = Math.abs(e.clientX - mouseDownPos.x);
@@ -324,21 +305,6 @@ function handleMouseUp(e: MouseEvent): void {
 
   const prevMode = mode;
   mode = "idle";
-
-  if (prevMode === "drag") {
-    if (onDragEndCallback) onDragEndCallback(e);
-    mouseDownPos = null;
-    mouseDownElement = null;
-    return;
-  }
-
-  // pending-drag without enough movement → click to select the child element
-  if (prevMode === "pending-drag" && mouseDownElement) {
-    selectElement(mouseDownElement);
-    mouseDownPos = null;
-    mouseDownElement = null;
-    return;
-  }
 
   if (prevMode === "marquee" && mouseDownPos) {
     if (marqueeBox) marqueeBox.style.display = "none";

@@ -148,7 +148,12 @@ function resetState(): void {
  * Initialises the property controller. Call once during overlay setup.
  */
 export function initPropertyController(shadowRoot: ShadowRoot): void {
-  sidebar = createSidebar(shadowRoot);
+  sidebar = createSidebar(shadowRoot, () => {
+    // Close button pressed — cancel overrides and clear state
+    cancel();
+    destroyControls();
+    resetState();
+  });
   observer.observe(document.body, { childList: true, subtree: true });
 }
 
