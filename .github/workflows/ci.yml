@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test
+        run: |
+          pnpm test
+          npx vitest run packages/overlay/src/__tests__/rdp.test.ts
+          npx vitest run packages/overlay/src/utils/color-math.test.ts
+          npx vitest run packages/overlay/src/properties/__tests__/tailwind-resolver.test.ts
