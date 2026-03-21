@@ -116,15 +116,11 @@ export const TYPOGRAPHY_DESCRIPTORS: PropertyDescriptor[] = [
   {
     key: "fontWeight", label: "Weight", group: "typography", controlType: "segmented", cssProperty: "font-weight", tailwindPrefix: "font", tailwindScale: "fontWeight", defaultValue: "400",
     enumValues: [
-      { value: "100", tailwindValue: "thin", label: "100" },
-      { value: "200", tailwindValue: "extralight", label: "200" },
       { value: "300", tailwindValue: "light", label: "300" },
       { value: "400", tailwindValue: "normal", label: "400" },
       { value: "500", tailwindValue: "medium", label: "500" },
       { value: "600", tailwindValue: "semibold", label: "600" },
       { value: "700", tailwindValue: "bold", label: "700" },
-      { value: "800", tailwindValue: "extrabold", label: "800" },
-      { value: "900", tailwindValue: "black", label: "900" },
     ],
   },
   { key: "lineHeight", label: "Height", group: "typography", controlType: "number-scrub", cssProperty: "line-height", tailwindPrefix: "leading", tailwindScale: "lineHeight", defaultValue: "normal" },

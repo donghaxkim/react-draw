@@ -104,6 +104,17 @@ export function createNumberScrub(
     }
   }
 
+  // Convert any CSS value to pixels for drag math
+  function toPx(value: string): number {
+    const num = parseFloat(value);
+    if (isNaN(num)) return 0;
+    if (value.includes("rem")) {
+      const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      return num * rootFontSize;
+    }
+    return num; // px or unitless
+  }
+
   // Drag handlers
   const onMouseMove = (e: MouseEvent): void => {
     if (!isDragging) return;
@@ -129,7 +140,7 @@ export function createNumberScrub(
     e.preventDefault();
     isDragging = true;
     startX = e.clientX;
-    startValue = parseFloat(getCurrentCssValue()) || 0;
+    startValue = toPx(getCurrentCssValue());
     input.style.cursor = "ew-resize";
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);

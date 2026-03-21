@@ -1,6 +1,7 @@
 import type { PropertyDescriptor } from "@sketch-ui/shared";
 import type { PropertyControl, OnPreview, OnCommit } from "./types.js";
 import { COLORS, FONT_FAMILY, RADII } from "../../design-tokens.js";
+import { openColorPicker, closeColorPicker } from "../../color-picker.js";
 
 export function createColorSwatch(
   descriptors: PropertyDescriptor[],
@@ -44,14 +45,27 @@ export function createColorSwatch(
   container.appendChild(input);
 
   let currentValue = values.get(descriptor.key) ?? descriptor.defaultValue;
+  let pickerOpen = false;
 
   function normalizeHex(value: string): string {
     const trimmed = value.trim();
-    // Accept named colors, rgb(), hex, etc. as-is; just ensure hex has #
     if (/^[0-9a-fA-F]{3,8}$/.test(trimmed)) {
       return `#${trimmed}`;
     }
     return trimmed;
+  }
+
+  function cssColorToHex(cssValue: string): string {
+    // Convert rgb(r, g, b) / rgba(r, g, b, a) to hex
+    const rgbMatch = cssValue.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+    if (rgbMatch) {
+      const r = parseInt(rgbMatch[1], 10);
+      const g = parseInt(rgbMatch[2], 10);
+      const b = parseInt(rgbMatch[3], 10);
+      return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+    }
+    if (/^#[0-9a-fA-F]{3,8}$/.test(cssValue)) return cssValue;
+    return "#000000";
   }
 
   function updateDisplay(cssValue: string): void {
@@ -61,6 +75,7 @@ export function createColorSwatch(
   }
 
   function commitValue(): void {
+    if (pickerOpen) return; // Don't commit on blur if picker is open
     const raw = input.value.trim();
     if (!raw) {
       updateDisplay(currentValue);
@@ -72,10 +87,30 @@ export function createColorSwatch(
     onCommit();
   }
 
-  // Swatch click — placeholder for color picker integration
+  // Swatch click — open color picker
   swatch.addEventListener("click", () => {
-    input.focus();
-    input.select();
+    if (pickerOpen) {
+      closeColorPicker();
+      pickerOpen = false;
+      return;
+    }
+
+    const rect = swatch.getBoundingClientRect();
+    pickerOpen = true;
+
+    openColorPicker({
+      initialColor: cssColorToHex(currentValue),
+      position: { x: rect.left - 210, y: rect.top },
+      showPropertyToggle: false,
+      onColorChange: (hex: string) => {
+        updateDisplay(hex);
+        onPreview(descriptor.key, hex);
+      },
+      onClose: () => {
+        pickerOpen = false;
+        onCommit();
+      },
+    });
   });
 
   input.addEventListener("keydown", (e: KeyboardEvent) => {
@@ -93,7 +128,6 @@ export function createColorSwatch(
   });
 
   input.addEventListener("input", () => {
-    // Live preview while typing if the value looks like a valid color
     const raw = input.value.trim();
     const normalized = normalizeHex(raw);
     swatch.style.background = normalized;
@@ -108,7 +142,10 @@ export function createColorSwatch(
       updateDisplay(cssValue);
     },
     destroy(): void {
-      // No document-level listeners
+      if (pickerOpen) {
+        closeColorPicker();
+        pickerOpen = false;
+      }
     },
   };
 }

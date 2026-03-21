@@ -192,12 +192,12 @@ export function createBoxModel(
     const cssVal = currentValues.get(descriptor.key) ?? descriptor.defaultValue;
     editInput.value = formatValue(cssVal);
 
-    // Position input over the span
+    // Position input over the span (account for scroll offset of ancestors)
     const spanRect = span.getBoundingClientRect();
     const rootRect = root.getBoundingClientRect();
     editInput.style.display = "block";
-    editInput.style.left = `${spanRect.left - rootRect.left}px`;
-    editInput.style.top = `${spanRect.top - rootRect.top}px`;
+    editInput.style.left = `${spanRect.left - rootRect.left + root.scrollLeft}px`;
+    editInput.style.top = `${spanRect.top - rootRect.top + root.scrollTop}px`;
     editInput.style.width = `${Math.max(40, spanRect.width + 10)}px`;
 
     editInput.focus();
