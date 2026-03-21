@@ -3,6 +3,14 @@ import type { PropertyControl, OnPreview, OnCommit } from "./types.js";
 import { COLORS, FONT_FAMILY, RADII } from "../../design-tokens.js";
 import { openColorPicker, closeColorPicker } from "../../color-picker.js";
 
+let _colorCtx: CanvasRenderingContext2D | null = null;
+function getColorCtx(): CanvasRenderingContext2D {
+  if (!_colorCtx) {
+    _colorCtx = document.createElement("canvas").getContext("2d")!;
+  }
+  return _colorCtx;
+}
+
 export function createColorSwatch(
   descriptors: PropertyDescriptor[],
   values: Map<string, string>,
@@ -42,7 +50,7 @@ export function createColorSwatch(
     if (v === "inherit" || v === "currentcolor" || v === "unset") return "#000000";
     if (/^#[0-9a-fA-F]{3,8}$/.test(v)) return v;
     // Canvas normalization — handles rgb(), hsl(), named colors, space syntax
-    const ctx = document.createElement("canvas").getContext("2d")!;
+    const ctx = getColorCtx();
     ctx.fillStyle = "#000000";
     ctx.fillStyle = v;
     const result = ctx.fillStyle;

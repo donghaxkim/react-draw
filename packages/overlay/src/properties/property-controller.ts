@@ -1,10 +1,11 @@
 import type { ComponentInfo, ElementIdentity } from "@sketch-ui/shared";
 import { ALL_DESCRIPTORS } from "./property-descriptors.js";
+const DESCRIPTOR_MAP = new Map(ALL_DESCRIPTORS.map(d => [d.key, d]));
 import { renderSections } from "./section-renderer.js";
 import { createSidebar } from "./property-sidebar.js";
 import { getTokenMap, resolveTokenForValue } from "./tailwind-resolver.js";
 import type { MergedTokenMap } from "./tailwind-resolver.js";
-import { send } from "../bridge.js";
+import { send, onCommitResult } from "../bridge.js";
 import type { PropertyControl } from "./controls/types.js";
 import { pushUndoAction, type PropertyChangeRuntime } from "../canvas-state.js";
 import { getFiberFromHostInstance, isCompositeFiber, getDisplayName } from "bippy";
@@ -43,6 +44,8 @@ let state = {
 let controls: PropertyControl[] = [];
 let sidebar: ReturnType<typeof createSidebar>;
 let reacquireTimer: ReturnType<typeof setTimeout>;
+let commitTimer: ReturnType<typeof setTimeout> | null = null;
+const COMMIT_DEBOUNCE_MS = 300;
 
 // ---------------------------------------------------------------------------
 // HMR survival observer
@@ -141,13 +144,26 @@ function rerenderSections(): void {
     ALL_DESCRIPTORS,
     state.currentValues,
     preview,
-    commit,
+    scheduledCommit,
   );
   controls = newControls;
   sidebar.replaceContent(container);
 }
 
+/**
+ * Debounced version of commit() for rapid-fire changes (e.g. arrow key increments).
+ * Batches multiple calls within COMMIT_DEBOUNCE_MS into a single commit.
+ */
+export function scheduledCommit(): void {
+  if (commitTimer) clearTimeout(commitTimer);
+  commitTimer = setTimeout(() => {
+    commitTimer = null;
+    commit();
+  }, COMMIT_DEBOUNCE_MS);
+}
+
 function resetState(): void {
+  if (commitTimer) { clearTimeout(commitTimer); commitTimer = null; }
   state = {
     selectedElement: null,
     componentInfo: null,
@@ -173,7 +189,19 @@ export function initPropertyController(shadowRoot: ShadowRoot): void {
     destroyControls();
     resetState();
   });
-  observer.observe(document.body, { childList: true, subtree: true });
+
+  // Surface transform errors from the CLI back to the user
+  onCommitResult((success, errorCode, errorMessage) => {
+    if (!success && sidebar) {
+      const friendlyMessages: Record<string, string> = {
+        DYNAMIC_CLASSNAME: "Cannot modify dynamic className expression",
+        CONFLICTING_CLASS: "Conflicting conditional class detected",
+        ELEMENT_NOT_FOUND: "Could not find element in source",
+      };
+      const msg = friendlyMessages[errorCode || ""] || errorMessage || "Failed to write changes";
+      sidebar.showWarning(msg, "Dismiss", () => sidebar.clearWarning());
+    }
+  });
 }
 
 /**
@@ -212,9 +240,13 @@ export function inspect(element: HTMLElement, info: ComponentInfo): void {
     ALL_DESCRIPTORS,
     state.currentValues,
     preview,
-    commit,
+    scheduledCommit,
   );
   controls = newControls;
+
+  // Reconnect observer scoped to selected element's parent
+  observer.disconnect();
+  observer.observe(element.parentElement || document.body, { childList: true, subtree: true });
 
   // Show sidebar
   sidebar.show(info.componentName, info.filePath, info.lineNumber, container);
@@ -225,7 +257,7 @@ export function inspect(element: HTMLElement, info: ComponentInfo): void {
  * corresponding Tailwind token for the pending batch.
  */
 export function preview(key: string, cssValue: string): void {
-  const desc = ALL_DESCRIPTORS.find((d) => d.key === key);
+  const desc = DESCRIPTOR_MAP.get(key);
   if (!desc || !state.selectedElement) return;
 
   // Layer 1: instant inline style override
@@ -295,7 +327,7 @@ export function commit(): void {
 
   if (state.pendingBatch.size === 1) {
     const update = [...state.pendingBatch.values()][0];
-    const desc = ALL_DESCRIPTORS.find(d => d.key === update.property);
+    const desc = DESCRIPTOR_MAP.get(update.property);
     send({
       type: "updateProperty",
       filePath,
@@ -313,7 +345,7 @@ export function commit(): void {
       lineNumber,
       columnNumber,
       updates: [...state.pendingBatch.values()].map(u => {
-        const desc = ALL_DESCRIPTORS.find(d => d.key === u.property);
+        const desc = DESCRIPTOR_MAP.get(u.property);
         return {
           ...u,
           classPattern: desc?.classPattern,
@@ -377,6 +409,8 @@ export function cancel(): void {
  * Used by Escape key and Clear All (revert to original).
  */
 export function deselect(): void {
+  if (commitTimer) { clearTimeout(commitTimer); commitTimer = null; }
+  observer.disconnect();
   cancel();
   destroyControls();
   if (sidebar) {
@@ -390,6 +424,8 @@ export function deselect(): void {
  * Used when clicking outside the sidebar (click-away = confirm).
  */
 export function commitAndDeselect(): void {
+  if (commitTimer) { clearTimeout(commitTimer); commitTimer = null; }
+  observer.disconnect();
   commit();
   destroyControls();
   if (sidebar) {

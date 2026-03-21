@@ -266,6 +266,10 @@ function buildClass(update: ClassNameUpdate): string {
  * E.g. prefix "p" matches "p-4", "p-[13px]", but not "px-4" or "pl-2".
  */
 function classMatchesPrefix(cls: string, prefix: string): boolean {
+  // Skip variant-prefixed classes (e.g. hover:bg-blue-700, dark:bg-gray-900).
+  // These are intentional state/responsive overrides and should not be
+  // matched when replacing the base utility class.
+  if (cls.includes(":")) return false;
   // Exact match for standalone classes like "rounded"
   if (cls === prefix) return true;
   // prefix- followed by something

@@ -234,6 +234,7 @@ export function initSelection(): void {
   document.addEventListener("mousemove", handleMouseMove, true);
   document.addEventListener("mouseup", handleMouseUp, true);
   document.addEventListener("keydown", handleKeyDown, true);
+  document.addEventListener("click", handleClick, true);
   document.addEventListener("scroll", updateSelectionPosition, true);
   window.addEventListener("resize", updateSelectionPosition);
   listenersAttached = true;
@@ -458,6 +459,14 @@ function findLowestCommonAncestor(
   return lastCommon;
 }
 
+function handleClick(e: MouseEvent): void {
+  if (!isActive) return;
+  // Ctrl/Cmd+click → let browser follow links normally
+  if (e.metaKey || e.ctrlKey) return;
+  // Block all other clicks (prevents link navigation, form submission, etc.)
+  e.preventDefault();
+}
+
 function handleKeyDown(e: KeyboardEvent): void {
   if (!isActive) return;
 
@@ -560,6 +569,7 @@ export function deactivateSelection(): void {
   document.removeEventListener("mousemove", handleMouseMove, true);
   document.removeEventListener("mouseup", handleMouseUp, true);
   document.removeEventListener("keydown", handleKeyDown, true);
+  document.removeEventListener("click", handleClick, true);
   document.removeEventListener("scroll", updateSelectionPosition, true);
   window.removeEventListener("resize", updateSelectionPosition);
   listenersAttached = false;
@@ -579,6 +589,7 @@ export function setEnabled(enabled: boolean): void {
     document.addEventListener("mousemove", handleMouseMove, true);
     document.addEventListener("mouseup", handleMouseUp, true);
     document.addEventListener("keydown", handleKeyDown, true);
+    document.addEventListener("click", handleClick, true);
     document.addEventListener("scroll", updateSelectionPosition, true);
     window.addEventListener("resize", updateSelectionPosition);
     listenersAttached = true;
@@ -588,6 +599,7 @@ export function setEnabled(enabled: boolean): void {
     document.removeEventListener("mousemove", handleMouseMove, true);
     document.removeEventListener("mouseup", handleMouseUp, true);
     document.removeEventListener("keydown", handleKeyDown, true);
+    document.removeEventListener("click", handleClick, true);
     document.removeEventListener("scroll", updateSelectionPosition, true);
     window.removeEventListener("resize", updateSelectionPosition);
     listenersAttached = false;

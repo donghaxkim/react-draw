@@ -173,6 +173,18 @@ export function resetCanvasTransform(): void {
   setCanvasTransform(1, 0, 0);
 }
 
+export function isCanvasActive(): boolean {
+  return wrapper !== null;
+}
+
+export function toggleCanvasTransform(): void {
+  if (wrapper) {
+    destroyCanvasTransform();
+  } else {
+    initCanvasTransform();
+  }
+}
+
 /**
  * Destroy the infinite canvas: unwrap page content back to body.
  */

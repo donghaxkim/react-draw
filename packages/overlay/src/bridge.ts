@@ -14,6 +14,13 @@ let onTabTakenOver: (() => void) | null = null;
 let onReconnectedCallback: (() => void) | null = null;
 let savedPort: number | null = null;
 
+type CommitResultListener = (success: boolean, errorCode?: string, errorMessage?: string) => void;
+let commitResultListener: CommitResultListener | null = null;
+
+export function onCommitResult(fn: CommitResultListener): void {
+  commitResultListener = fn;
+}
+
 export function connect(port: number): void {
   if (ws && ws.readyState === WebSocket.OPEN) return;
   savedPort = port;
@@ -34,6 +41,10 @@ export function connect(port: number): void {
       // Handle Tailwind token messages from CLI
       if (msg.type === "tailwindTokens") {
         setCliTokens(msg.tokens);
+      }
+      // Surface transform commit results
+      if (msg.type === "updatePropertyComplete" && commitResultListener) {
+        commitResultListener(msg.success, msg.errorCode, msg.error);
       }
       messageHandlers.forEach((handler) => handler(msg));
     } catch {

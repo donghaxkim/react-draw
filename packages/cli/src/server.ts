@@ -1,6 +1,7 @@
 // packages/cli/src/server.ts
 import { WebSocketServer, WebSocket } from "ws";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type {
   ClientMessage,
   ServerMessage,
@@ -11,6 +12,15 @@ import { reorderComponent, getSiblings } from "./transform.js";
 import { updateClassName } from "./transform.js";
 import { resolveTailwindConfig } from "./tailwind-resolver.js";
 
+/**
+ * Validate that a file path is within the project root to prevent
+ * path traversal attacks via WebSocket messages.
+ */
+function isPathSafe(filePath: string, projectRoot: string): boolean {
+  const resolved = path.resolve(filePath);
+  return resolved.startsWith(projectRoot + path.sep) || resolved === projectRoot;
+}
+
 interface SketchServer {
   wss: WebSocketServer;
   close: () => void;
@@ -19,6 +29,7 @@ interface SketchServer {
 
 export function createSketchServer(port: number): SketchServer {
   const wss = new WebSocketServer({ port });
+  const projectRoot = path.resolve(process.cwd());
   const undoStack: UndoEntry[] = [];
   let activeClient: WebSocket | null = null;
   let processing = false;
@@ -47,6 +58,11 @@ export function createSketchServer(port: number): SketchServer {
     try {
       switch (msg.type) {
         case "reorder": {
+          if (!isPathSafe(msg.filePath, projectRoot)) {
+            console.warn(`[SketchUI] Blocked path traversal attempt: ${msg.filePath}`);
+            send(ws, { type: "reorderComplete", success: false, error: "File path is outside the project root" });
+            break;
+          }
           const prevContent = fs.readFileSync(msg.filePath, "utf-8");
           undoStack.push({
             filePath: msg.filePath,
@@ -90,6 +106,11 @@ export function createSketchServer(port: number): SketchServer {
         }
 
         case "updateProperty": {
+          if (!isPathSafe(msg.filePath, projectRoot)) {
+            console.warn(`[SketchUI] Blocked path traversal attempt: ${msg.filePath}`);
+            send(ws, { type: "updatePropertyComplete", success: false, error: "File path is outside the project root" });
+            break;
+          }
           const prevContent = fs.readFileSync(msg.filePath, "utf-8");
           undoStack.push({ filePath: msg.filePath, content: prevContent, timestamp: Date.now() });
           try {
@@ -117,6 +138,11 @@ export function createSketchServer(port: number): SketchServer {
         }
 
         case "updateProperties": {
+          if (!isPathSafe(msg.filePath, projectRoot)) {
+            console.warn(`[SketchUI] Blocked path traversal attempt: ${msg.filePath}`);
+            send(ws, { type: "updatePropertyComplete", success: false, error: "File path is outside the project root" });
+            break;
+          }
           const prevContent = fs.readFileSync(msg.filePath, "utf-8");
           undoStack.push({ filePath: msg.filePath, content: prevContent, timestamp: Date.now() });
           try {
@@ -164,7 +190,6 @@ export function createSketchServer(port: number): SketchServer {
 
     // Resolve and send Tailwind tokens
     try {
-      const projectRoot = process.cwd();
       const config = resolveTailwindConfig(projectRoot);
       send(ws, { type: "tailwindTokens", tokens: config.tokens });
     } catch (err) {
@@ -186,6 +211,11 @@ export function createSketchServer(port: number): SketchServer {
 
         case "getSiblings":
           // Can run concurrently (read-only)
+          if (!isPathSafe(msg.filePath, projectRoot)) {
+            console.warn(`[SketchUI] Blocked path traversal attempt: ${msg.filePath}`);
+            send(ws, { type: "siblingsList", siblings: [] });
+            break;
+          }
           try {
             const siblings = getSiblings(msg.filePath, msg.parentLine);
             send(ws, { type: "siblingsList", siblings });

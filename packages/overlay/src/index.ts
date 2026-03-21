@@ -51,9 +51,6 @@ function init(): void {
     initPropertyController(shadowRoot);
   }
 
-  // Infinite canvas (wraps page content before other layers init)
-  initCanvasTransform();
-
   // Phase 1 systems
   initSelection();
   initHighlightCanvas();

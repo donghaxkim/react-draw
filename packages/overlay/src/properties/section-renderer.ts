@@ -7,6 +7,9 @@ import { createSlider } from "./controls/slider.js";
 import { createBoxModel } from "./controls/box-model.js";
 import { COLORS, FONT_FAMILY, RADII, TRANSITIONS } from "../design-tokens.js";
 
+// Persists collapse state across re-renders and element selections
+const collapsedGroups = new Set<string>();
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -261,9 +264,20 @@ export function renderSections(
     const body = document.createElement("div");
     body.className = "prop-section-body";
 
-    let collapsed = false;
+    let collapsed = collapsedGroups.has(group);
+    if (collapsed) {
+      const chevron = header.querySelector(".prop-section-chevron");
+      if (chevron) chevron.classList.add("collapsed");
+      body.classList.add("collapsed");
+    }
+
     header.addEventListener("click", () => {
       collapsed = !collapsed;
+      if (collapsed) {
+        collapsedGroups.add(group);
+      } else {
+        collapsedGroups.delete(group);
+      }
       const chevron = header.querySelector(".prop-section-chevron");
       if (chevron) {
         chevron.classList.toggle("collapsed", collapsed);

@@ -50,9 +50,9 @@ export function initInteraction(): void {
 }
 
 function onWheel(e: WheelEvent): void {
-  // Only zoom when SketchUI is active
   if (!interactionEl) return;
-  // Skip if target is inside the SketchUI shadow DOM (sidebar scrolling, etc.)
+  // Only zoom on Ctrl/Cmd+scroll (standard pinch-to-zoom). Regular scroll passes through.
+  if (!e.ctrlKey && !e.metaKey) return;
   const target = e.target as HTMLElement;
   if (target?.closest?.("#sketch-ui-root")) return;
   handleWheelZoom(e);
