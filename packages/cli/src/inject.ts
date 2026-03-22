@@ -38,14 +38,14 @@ export function createProxyServer(
     const normalizedUrl = new URL(req.url || "/", "http://localhost").pathname;
 
     // Serve overlay bundle
-    if (normalizedUrl === "/__sketch-ui/overlay.js") {
+    if (normalizedUrl === "/__frameup/overlay.js") {
       res.writeHead(200, { "Content-Type": "application/javascript" });
       fs.createReadStream(overlayPath).pipe(res);
       return;
     }
 
     // Serve font files
-    if (normalizedUrl === "/__sketch-ui/inter-regular.woff2") {
+    if (normalizedUrl === "/__frameup/inter-regular.woff2") {
       res.writeHead(200, {
         "Content-Type": "font/woff2",
         "Cache-Control": "public, max-age=31536000, immutable",
@@ -53,7 +53,7 @@ export function createProxyServer(
       fs.createReadStream(path.join(fontsDir, "inter-regular.woff2")).pipe(res);
       return;
     }
-    if (normalizedUrl === "/__sketch-ui/inter-semibold.woff2") {
+    if (normalizedUrl === "/__frameup/inter-semibold.woff2") {
       res.writeHead(200, {
         "Content-Type": "font/woff2",
         "Cache-Control": "public, max-age=31536000, immutable",
@@ -90,8 +90,8 @@ export function createProxyServer(
       let body = Buffer.concat(chunks).toString("utf-8");
 
       const injectedScript = `
-<script src="/__sketch-ui/overlay.js"></script>
-<script>window.__SKETCH_UI_WS_PORT__ = ${wsPort};</script>`;
+<script src="/__frameup/overlay.js"></script>
+<script>window.__FRAMEUP_WS_PORT__ = ${wsPort};</script>`;
 
       if (body.includes("</body>")) {
         body = body.replace("</body>", `${injectedScript}\n</body>`);
