@@ -91,10 +91,10 @@ export function addGhost(entry: GhostEntry): void {
   notifyStateChange();
 }
 
-export function moveGhost(id: string, pos: { x: number; y: number }): void {
+export function moveGhost(id: string, pos: { x: number; y: number }, previousPos?: { x: number; y: number }): void {
   const ghost = ghosts.get(id);
   if (!ghost) return;
-  const prev = { ...ghost.currentPos };
+  const prev = previousPos ?? { ...ghost.currentPos };
   ghost.currentPos = pos;
   undoStack.push({ type: "ghostMove", ghostId: id, previousPos: prev });
   notifyStateChange();
