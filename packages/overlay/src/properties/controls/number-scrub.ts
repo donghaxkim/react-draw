@@ -20,7 +20,7 @@ export function createNumberScrub(
   const input = document.createElement("input");
   input.type = "text";
   input.className = "prop-input";
-  input.style.cssText = `width:60px; cursor:ew-resize;`;
+  input.style.cssText = `width:60px; cursor:text;`;
 
   const tokenLabel = document.createElement("span");
   tokenLabel.style.cssText = `font-size:10px; color:${COLORS.textSecondary}; font-family:${FONT_FAMILY};`;
@@ -30,9 +30,6 @@ export function createNumberScrub(
 
   // State
   let currentValues = new Map(values);
-  let isDragging = false;
-  let startX = 0;
-  let startValue = 0;
 
   function getCurrentCssValue(): string {
     return currentValues.get(descriptor.key) ?? descriptor.defaultValue;
@@ -56,95 +53,8 @@ export function createNumberScrub(
     }
   }
 
-  function findNearestSnapPoint(targetValue: number): { cssValue: string; token: string | null } {
-    const currentCss = getCurrentCssValue();
-    try {
-      const snapPoints = getSnapPoints(scaleName, currentCss);
-      if (snapPoints.length === 0) {
-        return { cssValue: `${targetValue}px`, token: null };
-      }
-
-      let nearest = snapPoints[0];
-      let minDiff = Math.abs(snapPoints[0].numericValue - targetValue);
-      for (const pt of snapPoints) {
-        const diff = Math.abs(pt.numericValue - targetValue);
-        if (diff < minDiff) {
-          minDiff = diff;
-          nearest = pt;
-        }
-      }
-      return { cssValue: nearest.cssValue, token: nearest.token };
-    } catch {
-      return { cssValue: `${targetValue}px`, token: null };
-    }
-  }
-
-  function getScaleStep(): number {
-    const currentCss = getCurrentCssValue();
-    try {
-      const snapPoints = getSnapPoints(scaleName, currentCss);
-      if (snapPoints.length < 2) return 1;
-      const currentNum = parseFloat(currentCss);
-      const idx = snapPoints.findIndex((p) => p.numericValue >= currentNum);
-      if (idx > 0 && idx < snapPoints.length) {
-        return Math.abs(snapPoints[idx].numericValue - snapPoints[idx - 1].numericValue) || 1;
-      }
-      return 1;
-    } catch {
-      return 1;
-    }
-  }
-
-  // Convert any CSS value to pixels for drag math
-  function toPx(value: string): number {
-    const num = parseFloat(value);
-    if (isNaN(num)) return 0;
-    if (value.includes("rem")) {
-      const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-      return num * rootFontSize;
-    }
-    return num; // px or unitless
-  }
-
-  // Drag handlers
-  const onMouseMove = (e: MouseEvent): void => {
-    if (!isDragging) return;
-    const delta = (e.clientX - startX) * 0.5;
-    const minValue = descriptor.min !== undefined ? descriptor.min : -Infinity;
-    const targetValue = Math.max(minValue, startValue + delta);
-    const { cssValue } = findNearestSnapPoint(targetValue);
-    currentValues.set(descriptor.key, cssValue);
-    updateDisplay(cssValue);
-    onPreview(descriptor.key, cssValue);
-  };
-
-  const onMouseUp = (): void => {
-    if (!isDragging) return;
-    isDragging = false;
-    document.removeEventListener("mousemove", onMouseMove);
-    document.removeEventListener("mouseup", onMouseUp);
-    input.style.cursor = "ew-resize";
-    onCommit();
-  };
-
-  input.addEventListener("mousedown", (e: MouseEvent) => {
-    if (document.activeElement === input) return; // let text editing work when focused
-    e.preventDefault();
-    isDragging = true;
-    startX = e.clientX;
-    startValue = toPx(getCurrentCssValue());
-    input.style.cursor = "ew-resize";
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-  });
-
-  // Text input editing
-  input.addEventListener("focus", () => {
-    input.style.cursor = "text";
-  });
-
+  // Text input editing — commit on blur
   input.addEventListener("blur", () => {
-    input.style.cursor = "ew-resize";
     const raw = input.value.trim();
     const num = parseFloat(raw);
     if (!isNaN(num)) {
@@ -168,17 +78,6 @@ export function createNumberScrub(
   input.addEventListener("keydown", (e: KeyboardEvent) => {
     if (e.key === "Enter") {
       input.blur();
-    } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-      e.preventDefault();
-      const step = getScaleStep();
-      const current = parseFloat(getCurrentCssValue()) || 0;
-      const minValue = descriptor.min !== undefined ? descriptor.min : -Infinity;
-      const next = e.key === "ArrowUp" ? current + step : Math.max(minValue, current - step);
-      const { cssValue } = findNearestSnapPoint(next);
-      currentValues.set(descriptor.key, cssValue);
-      updateDisplay(cssValue);
-      onPreview(descriptor.key, cssValue);
-      onCommit();
     } else if (e.key === "Escape") {
       updateDisplay(getCurrentCssValue());
       input.blur();
@@ -196,8 +95,7 @@ export function createNumberScrub(
       updateDisplay(cssValue);
     },
     destroy(): void {
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
+      // No document-level listeners
     },
   };
 }

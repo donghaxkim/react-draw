@@ -9,66 +9,64 @@ export function createSlider(
   onCommit: OnCommit,
 ): PropertyControl {
   const descriptor = descriptors[0];
-  const min = descriptor.min ?? 0;
-  const max = descriptor.max ?? 100;
   const isOpacity = descriptor.key === "opacity";
 
   const container = document.createElement("div");
   container.style.cssText = `display:flex; align-items:center; gap:6px;`;
 
-  const slider = document.createElement("input");
-  slider.type = "range";
-  slider.min = String(min);
-  slider.max = String(max);
-  slider.step = "1";
-  slider.className = "prop-slider";
-  slider.style.cssText = `flex:1;`;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "prop-input";
+  input.style.cssText = `width:60px; cursor:text;`;
 
-  const valueDisplay = document.createElement("span");
-  valueDisplay.style.cssText = `
+  const unitLabel = document.createElement("span");
+  unitLabel.style.cssText = `
     font-family:${FONT_FAMILY};
     font-size:11px;
-    color:${COLORS.textPrimary};
-    min-width:28px;
-    text-align:right;
+    color:${COLORS.textSecondary};
+    min-width:16px;
   `.trim().replace(/\n\s*/g, " ");
+  if (isOpacity) unitLabel.textContent = "%";
 
-  container.appendChild(slider);
-  container.appendChild(valueDisplay);
+  container.appendChild(input);
+  container.appendChild(unitLabel);
 
   let currentCssValue = values.get(descriptor.key) ?? descriptor.defaultValue;
 
-  function cssToSlider(cssValue: string): number {
-    const num = parseFloat(cssValue);
-    if (isNaN(num)) return isOpacity ? max : min;
-    // opacity CSS is 0..1, slider is 0..100
-    return isOpacity ? Math.round(num * 100) : num;
-  }
-
-  function sliderToCss(sliderValue: number): string {
-    if (isOpacity) {
-      return String(sliderValue / 100);
-    }
-    return String(sliderValue);
-  }
-
   function updateDisplay(cssValue: string): void {
     currentCssValue = cssValue;
-    const sliderVal = cssToSlider(cssValue);
-    slider.value = String(sliderVal);
-    valueDisplay.textContent = isOpacity ? `${sliderVal}%` : String(sliderVal);
+    const num = parseFloat(cssValue);
+    if (isNaN(num)) {
+      input.value = cssValue;
+    } else {
+      // opacity CSS is 0..1, display as 0..100
+      input.value = isOpacity ? String(Math.round(num * 100)) : String(num);
+    }
   }
 
-  slider.addEventListener("input", () => {
-    const sliderVal = parseInt(slider.value, 10);
-    const cssValue = sliderToCss(sliderVal);
-    currentCssValue = cssValue;
-    valueDisplay.textContent = isOpacity ? `${sliderVal}%` : String(sliderVal);
-    onPreview(descriptor.key, cssValue);
+  input.addEventListener("blur", () => {
+    const raw = input.value.trim();
+    const num = parseFloat(raw);
+    if (!isNaN(num)) {
+      // opacity: convert display 0-100 back to CSS 0-1
+      const cssValue = isOpacity ? String(Math.min(100, Math.max(0, num)) / 100) : String(num);
+      currentCssValue = cssValue;
+      updateDisplay(cssValue);
+      onPreview(descriptor.key, cssValue);
+      onCommit();
+    } else {
+      // Revert on invalid input
+      updateDisplay(currentCssValue);
+    }
   });
 
-  slider.addEventListener("change", () => {
-    onCommit();
+  input.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter") {
+      input.blur();
+    } else if (e.key === "Escape") {
+      updateDisplay(currentCssValue);
+      input.blur();
+    }
   });
 
   updateDisplay(currentCssValue);

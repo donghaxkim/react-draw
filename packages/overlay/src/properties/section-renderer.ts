@@ -126,30 +126,6 @@ const SECTION_STYLES = `
     border-color: ${COLORS.accent};
     box-shadow: 0 0 0 2px ${COLORS.focusRing};
   }
-  .prop-slider {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 100%;
-    height: 4px;
-    border-radius: 2px;
-    background: ${COLORS.bgTertiary};
-    outline: none;
-    cursor: pointer;
-  }
-  .prop-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: ${COLORS.accent};
-    border: 2px solid white;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-    cursor: pointer;
-  }
-  .prop-slider:focus::-webkit-slider-thumb {
-    box-shadow: 0 0 0 3px ${COLORS.focusRing};
-  }
   .prop-control-row {
     display: flex;
     align-items: center;
