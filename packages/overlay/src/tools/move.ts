@@ -16,6 +16,7 @@ export const moveHandler: ToolEventHandler = {
     const existingGhost = findGhostAtPoint(e.clientX, e.clientY);
     if (existingGhost) {
       dragTarget = existingGhost;
+
       const page = viewportToPage(e.clientX, e.clientY);
       dragOffset = {
         x: page.x - existingGhost.currentPos.x,
@@ -45,6 +46,7 @@ export const moveHandler: ToolEventHandler = {
       for (const ghost of getGhosts().values()) {
         if (ghost.originalEl === el || ghost.originalEl.contains(el) || el.contains(ghost.originalEl)) {
           dragTarget = ghost;
+
           const page = viewportToPage(e.clientX, e.clientY);
           dragOffset = {
             x: page.x - ghost.currentPos.x,
@@ -64,6 +66,7 @@ export const moveHandler: ToolEventHandler = {
     });
 
     dragTarget = ghost;
+
     const page = viewportToPage(e.clientX, e.clientY);
     dragOffset = {
       x: page.x - ghost.currentPos.x,

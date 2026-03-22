@@ -14,7 +14,7 @@ import { showOnboardingHint, dismissOnboarding } from "./onboarding.js";
 import {
   onToolChange, onStateChange, getActiveTool, setActiveTool,
   canvasUndo, canUndo, resetCanvas, hasChanges, serializeAnnotations,
-  getOriginalsHidden, setOriginalsHidden,
+  getOriginalsHidden, setOriginalsHidden, onAnnotationRemoved,
 } from "./canvas-state.js";
 import { initPropertyController } from "./properties/property-controller.js";
 import { activatePointer, deactivatePointer } from "./tools/pointer.js";
@@ -59,6 +59,9 @@ function init(): void {
   // Phase 2A layers
   initAnnotationLayer();
   initGhostLayer();
+
+  // Wire annotation removal from undo to SVG layer cleanup
+  onAnnotationRemoved((id) => removeAnnotationElement(id));
   initToolsPanel();
   initInteraction();
   showOnboardingHint();

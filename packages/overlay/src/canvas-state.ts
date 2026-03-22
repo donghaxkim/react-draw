@@ -116,12 +116,29 @@ export function getAnnotations(): Annotation[] { return annotations; }
 
 export function addAnnotation(ann: Annotation): void {
   annotations.push(ann);
-  undoStack.push({ type: "annotationAdd", annotationId: ann.id });
+  // Push the right undo action based on annotation type
+  if (ann.type === "colorChange") {
+    const colorAnn = ann as ColorOverrideRuntime;
+    undoStack.push({
+      type: "colorChange",
+      annotationId: ann.id,
+      property: colorAnn.property,
+      previousColor: colorAnn.fromColor,
+    });
+  } else {
+    undoStack.push({ type: "annotationAdd", annotationId: ann.id });
+  }
   notifyStateChange();
+}
+
+let annotationRemovedCallback: ((id: string) => void) | null = null;
+export function onAnnotationRemoved(fn: (id: string) => void): void {
+  annotationRemovedCallback = fn;
 }
 
 export function removeAnnotation(id: string): void {
   annotations = annotations.filter(a => a.id !== id);
+  annotationRemovedCallback?.(id);
   notifyStateChange();
 }
 
@@ -169,8 +186,13 @@ export function canvasUndo(): string | null {
       const ghost = ghosts.get(action.ghostId);
       if (ghost) {
         ghost.currentPos = action.previousPos;
-        ghost.cloneEl.style.left = `${action.previousPos.x}px`;
-        ghost.cloneEl.style.top = `${action.previousPos.y}px`;
+        // Convert page coords to viewport through canvas transform
+        const vx = action.previousPos.x * canvasScale + canvasOffsetX;
+        const vy = action.previousPos.y * canvasScale + canvasOffsetY;
+        ghost.cloneEl.style.left = `${vx}px`;
+        ghost.cloneEl.style.top = `${vy}px`;
+        ghost.cloneEl.style.transform = `scale(${canvasScale})`;
+        ghost.cloneEl.style.transformOrigin = "0 0";
       }
       return "move reverted";
     }
