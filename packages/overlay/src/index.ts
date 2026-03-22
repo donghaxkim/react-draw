@@ -5,7 +5,7 @@ import { initSelection, deactivateSelection, clearSelection } from "./selection.
 import { initHighlightCanvas, destroyHighlightCanvas } from "./highlight-canvas.js";
 import { initDrag, deactivateDrag } from "./drag.js";
 import { initAnnotationLayer, destroyAnnotationLayer, clearAnnotationLayer, removeAnnotationElement } from "./annotation-layer.js";
-import { initGhostLayer, destroyGhostLayer } from "./ghost-layer.js";
+import { initGhostLayer, destroyGhostLayer, updateGhostPosition } from "./ghost-layer.js";
 import { initToolsPanel, destroyToolsPanel, updateActiveToolUI, setOnClearAll, setOnCanvasUndo as setOnCanvasUndoPanel, updateCanvasUndoButton, flashToolButton } from "./tools-panel.js";
 import { initInteraction, destroyInteraction, activateInteraction, registerToolHandler } from "./interaction.js";
 import { clearElementCache } from "./utils/element-cache.js";
@@ -14,7 +14,7 @@ import { showOnboardingHint, dismissOnboarding } from "./onboarding.js";
 import {
   onToolChange, onStateChange, getActiveTool, setActiveTool,
   canvasUndo, canUndo, resetCanvas, hasChanges, serializeAnnotations,
-  getOriginalsHidden, setOriginalsHidden, onAnnotationRemoved,
+  getOriginalsHidden, setOriginalsHidden, onAnnotationRemoved, onGhostPositionUpdate,
 } from "./canvas-state.js";
 import { initPropertyController } from "./properties/property-controller.js";
 import { activatePointer, deactivatePointer } from "./tools/pointer.js";
@@ -62,6 +62,8 @@ function init(): void {
 
   // Wire annotation removal from undo to SVG layer cleanup
   onAnnotationRemoved((id) => removeAnnotationElement(id));
+  // Wire ghost position updates from undo to ghost-layer (handles wrapper vs body positioning)
+  onGhostPositionUpdate((id, x, y) => updateGhostPosition(id, x, y));
   initToolsPanel();
   initInteraction();
   showOnboardingHint();

@@ -136,6 +136,11 @@ export function onAnnotationRemoved(fn: (id: string) => void): void {
   annotationRemovedCallback = fn;
 }
 
+let ghostPositionCallback: ((id: string, pageX: number, pageY: number) => void) | null = null;
+export function onGhostPositionUpdate(fn: (id: string, pageX: number, pageY: number) => void): void {
+  ghostPositionCallback = fn;
+}
+
 export function removeAnnotation(id: string): void {
   annotations = annotations.filter(a => a.id !== id);
   annotationRemovedCallback?.(id);
@@ -186,13 +191,8 @@ export function canvasUndo(): string | null {
       const ghost = ghosts.get(action.ghostId);
       if (ghost) {
         ghost.currentPos = action.previousPos;
-        // Convert page coords to viewport through canvas transform
-        const vx = action.previousPos.x * canvasScale + canvasOffsetX;
-        const vy = action.previousPos.y * canvasScale + canvasOffsetY;
-        ghost.cloneEl.style.left = `${vx}px`;
-        ghost.cloneEl.style.top = `${vy}px`;
-        ghost.cloneEl.style.transform = `scale(${canvasScale})`;
-        ghost.cloneEl.style.transformOrigin = "0 0";
+        // Route DOM update through ghost-layer callback (handles wrapper vs body positioning)
+        ghostPositionCallback?.(action.ghostId, action.previousPos.x, action.previousPos.y);
       }
       return "move reverted";
     }

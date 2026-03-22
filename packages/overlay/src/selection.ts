@@ -24,6 +24,8 @@ import { getElementsInArea } from "./utils/area-selection.js";
 import { COLORS, SHADOWS, RADII, TRANSITIONS, FONT_FAMILY } from "./design-tokens.js";
 import { setHoverTarget, setSelectionTarget } from "./highlight-canvas.js";
 import { inspect, deselect as deselectProperty, commitAndDeselect, cancel as cancelProperty, hasActiveOverrides } from "./properties/property-controller.js";
+import { findGhostAtPoint } from "./ghost-layer.js";
+import type { GhostEntry } from "./canvas-state.js";
 
 // Ensure bippy instrumentation is active so we can read fiber info
 if (!isInstrumentationActive()) {
@@ -146,6 +148,7 @@ function resolveComponentSync(el: HTMLElement): ResolvedComponent | null {
 
 let currentSelection: ComponentInfo | null = null;
 let selectedElement: HTMLElement | null = null;
+let selectedGhost: GhostEntry | null = null; // non-null when selection is a moved ghost
 let isActive = false;
 let listenersAttached = false;
 
@@ -269,12 +272,23 @@ function handleMouseDown(e: MouseEvent): void {
   e.preventDefault();
   e.stopPropagation();
 
+  // Check if the user clicked on a moved ghost element first
+  const ghost = findGhostAtPoint(e.clientX, e.clientY);
+  if (ghost) {
+    mouseDownPos = { x: e.clientX, y: e.clientY };
+    mouseDownElement = ghost.originalEl;
+    selectedGhost = ghost;
+    mode = "pending";
+    return;
+  }
+
   if (!el || !isValidElement(el)) {
     // Clicking on empty/invalid area with a selection → save changes and deselect
     if (currentSelection) {
       commitAndDeselect();
       currentSelection = null;
       selectedElement = null;
+      selectedGhost = null;
       setSelectionTarget(null);
       if (selectionLabel) {
         selectionLabel.classList.remove("visible");
@@ -287,6 +301,7 @@ function handleMouseDown(e: MouseEvent): void {
 
   mouseDownPos = { x: e.clientX, y: e.clientY };
   mouseDownElement = el;
+  selectedGhost = null;
 
   // Always use "pending" mode — clicking selects, dragging does marquee.
   // No drag-to-reorder in pointer mode.
@@ -319,6 +334,15 @@ function handleMouseMove(e: MouseEvent): void {
 
   // Hover highlight (only when idle — no mouse button down)
   if (mode === "idle") {
+    // Check ghosts first — moved elements should be hoverable at their new position
+    const ghost = findGhostAtPoint(e.clientX, e.clientY);
+    if (ghost) {
+      const rect = ghost.cloneEl.getBoundingClientRect();
+      const br = parseFloat(getComputedStyle(ghost.originalEl).borderRadius) || 4;
+      setHoverTarget(rect, br + 2);
+      return;
+    }
+
     const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement;
     if (!el || !isValidElement(el)) {
       setHoverTarget(null);
@@ -359,9 +383,14 @@ function handleMouseUp(e: MouseEvent): void {
 
 async function selectElement(el: HTMLElement): Promise<void> {
   try {
+    // Use ghost clone rect if selecting a moved element, otherwise use DOM element rect
+    const displayRect = selectedGhost
+      ? selectedGhost.cloneEl.getBoundingClientRect()
+      : el.getBoundingClientRect();
+
     // Show selection overlay with loading dots immediately, before async resolve
     selectedElement = el;
-    showSelectionOverlay(el.getBoundingClientRect(), {} as any);
+    showSelectionOverlay(displayRect, {} as any);
     hideHoverOverlay();
 
     const resolved = await resolveComponentFromElement(el);
@@ -376,10 +405,10 @@ async function selectElement(el: HTMLElement): Promise<void> {
       columnNumber: resolved.columnNumber,
       stack: resolved.stack,
       boundingRect: {
-        top: el.getBoundingClientRect().top,
-        left: el.getBoundingClientRect().left,
-        width: el.getBoundingClientRect().width,
-        height: el.getBoundingClientRect().height,
+        top: displayRect.top,
+        left: displayRect.left,
+        width: displayRect.width,
+        height: displayRect.height,
       },
     };
 
@@ -537,7 +566,10 @@ function showSelectionOverlay(rect: DOMRect, _info: any): void {
 /** Update selection highlight + label to track the selected element on scroll/resize */
 function updateSelectionPosition(): void {
   if (!selectedElement || !currentSelection) return;
-  const rect = selectedElement.getBoundingClientRect();
+  // Use ghost clone rect if this selection is a moved element
+  const rect = selectedGhost
+    ? selectedGhost.cloneEl.getBoundingClientRect()
+    : selectedElement.getBoundingClientRect();
   const br = parseFloat(getComputedStyle(selectedElement).borderRadius) || 4;
   setSelectionTarget(rect, br + 2);
 
@@ -567,6 +599,7 @@ export function clearSelection(): void {
   deselectProperty();
   currentSelection = null;
   selectedElement = null;
+  selectedGhost = null;
   setSelectionTarget(null);
   if (selectionLabel) {
     selectionLabel.classList.remove("visible");

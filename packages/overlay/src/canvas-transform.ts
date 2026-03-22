@@ -23,6 +23,19 @@ let unsubTransform: (() => void) | null = null;
 // Track original body children so we can unwrap on destroy
 let originalBodyChildren: Node[] = [];
 
+// Wrapper change listeners — notified when wrapper is created or destroyed
+type WrapperChangeListener = (wrapper: HTMLDivElement | null) => void;
+let wrapperChangeListeners: WrapperChangeListener[] = [];
+
+export function getCanvasWrapper(): HTMLDivElement | null {
+  return wrapper;
+}
+
+export function onCanvasWrapperChange(fn: WrapperChangeListener): () => void {
+  wrapperChangeListeners.push(fn);
+  return () => { wrapperChangeListeners = wrapperChangeListeners.filter(f => f !== fn); };
+}
+
 // Saved original backgrounds to restore on destroy
 let savedBodyBg = "";
 let savedHtmlBg = "";
@@ -103,6 +116,9 @@ export function initCanvasTransform(): void {
   // Subscribe to transform changes
   unsubTransform = onCanvasTransformChange(applyTransform);
   applyTransform();
+
+  // Notify listeners that wrapper is now available
+  wrapperChangeListeners.forEach(fn => fn(wrapper));
 }
 
 function applyTransform(): void {
@@ -189,6 +205,9 @@ export function toggleCanvasTransform(): void {
  * Destroy the infinite canvas: unwrap page content back to body.
  */
 export function destroyCanvasTransform(): void {
+  // Notify listeners before wrapper is removed (so they can move elements out)
+  wrapperChangeListeners.forEach(fn => fn(null));
+
   unsubTransform?.();
   unsubTransform = null;
 

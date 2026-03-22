@@ -29,28 +29,18 @@ export function initAnnotationLayer(): void {
   syncTransform();
 }
 
-let rafId: number | null = null;
-
 /**
- * Sync the annotation root group with both scroll offset and canvas transform.
- * Annotations are stored in page coordinates, so we apply:
- *   1. Canvas scale + offset (zoom/pan)
- *   2. Scroll offset is already baked into the canvas transform when active
+ * Sync the annotation root group with canvas transform (synchronous — no RAF).
+ * Runs in the same JS tick as the wrapper transform update so annotations
+ * and page content move in the exact same frame.
  */
 function syncTransform(): void {
-  if (rafId !== null) return;
-  rafId = requestAnimationFrame(() => {
-    rafId = null;
-    if (!rootGroup) return;
-    const { scale, offsetX, offsetY } = getCanvasTransform();
-    // When canvas is active (scale !== 1 or offset !== 0), the canvas transform
-    // already accounts for panning. Annotations in page coords need the same
-    // scale + translate as the page content wrapper.
-    rootGroup.setAttribute(
-      "transform",
-      `translate(${offsetX}, ${offsetY}) scale(${scale})`
-    );
-  });
+  if (!rootGroup) return;
+  const { scale, offsetX, offsetY } = getCanvasTransform();
+  rootGroup.setAttribute(
+    "transform",
+    `translate(${offsetX}, ${offsetY}) scale(${scale})`
+  );
 }
 
 export function addStrokePath(
