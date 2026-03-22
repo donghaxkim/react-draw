@@ -42,6 +42,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
   const undoStack: UndoEntry[] = [];
   let activeClient: WebSocket | null = null;
   let processing = false;
+  let generateLocked = false; // (#1) Lock queue during AI generation
   const queue: Array<{ msg: ClientMessage; ws: WebSocket }> = [];
 
   function extractErrorCode(err: unknown): TransformErrorCode | undefined {
@@ -59,7 +60,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
   }
 
   async function processQueue() {
-    if (processing || queue.length === 0) return;
+    if (processing || generateLocked || queue.length === 0) return;
     processing = true;
 
     const { msg, ws } = queue.shift()!;
@@ -245,16 +246,18 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             break;
           }
 
-          // Run generate async — don't block the queue
+          // (#1) Lock the queue — no file writes until generate completes
+          generateLocked = true;
+
           generate({
             annotations: msg.annotations,
             apiKey: resolvedKey,
-            projectRoot: process.cwd(),
+            projectRoot: projectRoot,
             onProgress(stage, message) {
               send(ws, { type: "generateProgress", stage, message });
             },
           }).then((result) => {
-            // Push undo entries so Ctrl+Z reverts AI changes
+            // Push undo entries BEFORE unlocking (#3 — entries captured before API call)
             if (result.success) {
               for (const entry of result.undoEntries) {
                 undoStack.push({
@@ -277,6 +280,10 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
               changes: [],
               error: err instanceof Error ? err.message : String(err),
             });
+          }).finally(() => {
+            // (#1) Unlock queue and drain any pending messages
+            generateLocked = false;
+            processQueue();
           });
           break;
         }

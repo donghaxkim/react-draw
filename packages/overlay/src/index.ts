@@ -121,8 +121,16 @@ function init(): void {
 
   // Generate button — sends annotations to CLI → Claude API → writes code
   let generating = false;
+  let cooldownUntil = 0; // (#8) Error cooldown timestamp
   setOnGenerate(() => {
-    if (generating) return; // Prevent double-click
+    if (generating) return;
+    // (#8) Cooldown after errors
+    const now = Date.now();
+    if (now < cooldownUntil) {
+      const remaining = Math.ceil((cooldownUntil - now) / 1000);
+      showToast(`Please wait ${remaining}s before retrying`);
+      return;
+    }
     const data = serializeAnnotations();
     if (!data.moves.length && !data.annotations.length && !data.colorChanges.length) {
       showToast("Nothing to generate — make some visual changes first");
@@ -145,12 +153,15 @@ function init(): void {
           .map((c) => c.description || c.filePath)
           .join(", ");
         showToast(`Applied: ${summary}`);
-        // Clear canvas after successful generation — changes are in source now
+        // (#6) Clear selection first (closes sidebar, avoids stale refs after HMR)
+        clearSelection();
         clearAnnotationLayer();
         clearLassoSelection();
         resetCanvas();
       } else {
         showToast(`Error: ${msg.error || "Generation failed"}`);
+        // (#8) 5 second cooldown after errors to prevent spam
+        cooldownUntil = Date.now() + 5000;
       }
     }
   });

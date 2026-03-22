@@ -4,6 +4,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { SerializedAnnotations, FileChange, GenerateStage } from "@sketch-ui/shared";
+import jscodeshift from "jscodeshift";
+import { getParser } from "./transform.js";
 
 interface GenerateOptions {
   annotations: SerializedAnnotations;
@@ -23,6 +25,8 @@ interface GenerateResult {
   undoEntries: UndoFileEntry[];
   error?: string;
 }
+
+// --- Helpers ---
 
 /**
  * Collect all unique file paths referenced in the annotations.
@@ -46,30 +50,49 @@ function getReferencedFiles(annotations: SerializedAnnotations): string[] {
 
 /**
  * Read source files and return a map of filePath → content.
- * Paths are resolved relative to projectRoot if not absolute.
+ * Also saves original content for undo BEFORE any API call (#3).
  */
 function readSourceFiles(
   filePaths: string[],
   projectRoot: string,
-): Map<string, string> {
+): { sources: Map<string, string>; undoEntries: UndoFileEntry[] } {
   const sources = new Map<string, string>();
+  const undoEntries: UndoFileEntry[] = [];
 
   for (const fp of filePaths) {
     const resolved = path.isAbsolute(fp) ? fp : path.resolve(projectRoot, fp);
     try {
       const content = fs.readFileSync(resolved, "utf-8");
       sources.set(fp, content);
+      // Save undo entry NOW, before any API call or file write (#3)
+      undoEntries.push({ filePath: resolved, content });
     } catch {
-      // File might not exist or be unreadable — skip
       console.warn(`[SketchUI] Could not read source file: ${fp}`);
     }
   }
 
-  return sources;
+  return { sources, undoEntries };
 }
 
 /**
- * Build the prompt for Claude, including annotations and source files.
+ * Estimate token count from a string (rough: 1 token ≈ 4 chars). (#5)
+ */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/**
+ * Format estimated cost based on token count (Sonnet pricing).
+ */
+function formatCost(inputTokens: number, outputTokens: number): string {
+  // Sonnet pricing: $3/M input, $15/M output
+  const cost = (inputTokens / 1_000_000) * 3 + (outputTokens / 1_000_000) * 15;
+  if (cost < 0.01) return "<$0.01";
+  return `~$${cost.toFixed(2)}`;
+}
+
+/**
+ * Build the prompt for Claude, including annotations and numbered source files (#4).
  */
 function buildPrompt(
   annotations: SerializedAnnotations,
@@ -83,8 +106,9 @@ The user has made visual changes using a design overlay tool. Your job is to mod
 - Only modify the files referenced in the annotations
 - Use Tailwind CSS classes (not inline styles) for styling changes
 - Preserve the existing code structure — only change what the annotations specify
-- Return the COMPLETE modified file contents (not diffs)
+- Return the COMPLETE modified file contents (not diffs, not fragments)
 - If an annotation is ambiguous, make a reasonable interpretation
+- Source files include line numbers for reference (e.g. "42: <Button>")
 
 ## User's Visual Changes
 
@@ -139,51 +163,57 @@ The user has made visual changes using a design overlay tool. Your job is to mod
     prompt += `\nDrawings typically circle or highlight areas the user wants changed. Consider them as visual emphasis on the nearby components.\n\n`;
   }
 
-  // Source files
+  // Source files with line numbers (#4)
   prompt += `## Source Files\n\n`;
   for (const [filePath, content] of sources) {
     const ext = path.extname(filePath).slice(1) || "tsx";
-    prompt += `### \`${filePath}\`\n\`\`\`${ext}\n${content}\n\`\`\`\n\n`;
+    const numberedLines = content
+      .split("\n")
+      .map((line, i) => `${i + 1}: ${line}`)
+      .join("\n");
+    prompt += `### \`${filePath}\`\n\`\`\`${ext}\n${numberedLines}\n\`\`\`\n\n`;
   }
 
   prompt += `## Response Format
 
-For each file you modify, respond with a section like this:
+For each file you modify, respond with EXACTLY this format:
 
-### FILE: path/to/file.tsx
+\`\`\`
+FILE: path/to/file.tsx
+\`\`\`
 \`\`\`tsx
-// complete modified file contents
+// complete modified file contents (WITHOUT line numbers)
+\`\`\`
+\`\`\`
+DESCRIPTION: path/to/file.tsx
+Brief description of what was changed.
 \`\`\`
 
-### DESCRIPTION: path/to/file.tsx
-Brief description of what was changed.
-
-Only include files that need changes. Include the COMPLETE file content, not just the changed parts.`;
+Only include files that need changes. Include the COMPLETE file content, not fragments or diffs. Do NOT include the line numbers in your output — those are only for reference.`;
 
   return prompt;
 }
 
 /**
- * Parse Claude's response into file changes.
+ * Parse Claude's response into file changes. (#2 - more robust parsing)
  */
-function parseResponse(
-  responseText: string,
-  projectRoot: string,
-): Array<{ filePath: string; content: string; description: string }> {
+function parseResponse(responseText: string): Array<{ filePath: string; content: string; description: string }> {
   const changes: Array<{ filePath: string; content: string; description: string }> = [];
 
-  // Match FILE sections: ### FILE: path\n```lang\ncontent\n```
-  const fileRegex = /### FILE:\s*(.+?)\n```\w*\n([\s\S]*?)```/g;
+  // Match FILE blocks: FILE: path followed by a code fence
+  const fileRegex = /FILE:\s*(.+?)\n```\w*\n([\s\S]*?)```/g;
   let match;
 
   while ((match = fileRegex.exec(responseText)) !== null) {
     const filePath = match[1].trim();
     const content = match[2];
+    // Skip if this looks like a description block, not a file block
+    if (filePath.startsWith("DESCRIPTION")) continue;
     changes.push({ filePath, content, description: "" });
   }
 
-  // Match DESCRIPTION sections: ### DESCRIPTION: path\ntext
-  const descRegex = /### DESCRIPTION:\s*(.+?)\n([\s\S]*?)(?=###|$)/g;
+  // Match DESCRIPTION blocks
+  const descRegex = /DESCRIPTION:\s*(.+?)\n([\s\S]*?)(?=(?:FILE:|DESCRIPTION:|```)|$)/g;
   while ((match = descRegex.exec(responseText)) !== null) {
     const filePath = match[1].trim();
     const description = match[2].trim();
@@ -197,46 +227,103 @@ function parseResponse(
 }
 
 /**
+ * Validate a parsed file change before writing. (#2)
+ * Returns null if valid, error string if invalid.
+ */
+function validateChange(
+  change: { filePath: string; content: string },
+  originalContent: string | undefined,
+  projectRoot: string,
+): string | null {
+  const resolved = path.isAbsolute(change.filePath)
+    ? change.filePath
+    : path.resolve(projectRoot, change.filePath);
+
+  // Check file exists
+  if (!fs.existsSync(resolved)) {
+    return `File does not exist: ${change.filePath}`;
+  }
+
+  // Check content is not empty
+  if (!change.content.trim()) {
+    return `Empty content for ${change.filePath}`;
+  }
+
+  // Check content length is reasonable (50-200% of original)
+  if (originalContent) {
+    const ratio = change.content.length / originalContent.length;
+    if (ratio < 0.3) {
+      return `Content too short for ${change.filePath} (${Math.round(ratio * 100)}% of original — likely a fragment)`;
+    }
+    if (ratio > 3.0) {
+      return `Content too long for ${change.filePath} (${Math.round(ratio * 100)}% of original — likely includes explanation text)`;
+    }
+  }
+
+  // Try to parse as JSX/TSX to catch syntax errors
+  const ext = path.extname(change.filePath);
+  if ([".tsx", ".jsx", ".ts", ".js"].includes(ext)) {
+    try {
+      const parserName = getParser(resolved);
+      const j = jscodeshift.withParser(parserName);
+      j(change.content); // Throws if syntax is invalid
+    } catch {
+      return `Invalid syntax in generated content for ${change.filePath}`;
+    }
+  }
+
+  return null;
+}
+
+// --- Main ---
+
+/**
  * Main generate function — orchestrates the full flow.
  */
 export async function generate(options: GenerateOptions): Promise<GenerateResult> {
   const { annotations, apiKey, projectRoot, onProgress } = options;
 
   try {
-    // 1. Analyze — collect referenced files
+    // 1. Analyze — collect referenced files and save originals for undo (#3)
     onProgress("analyzing", "Reading source files...");
 
     const referencedFiles = getReferencedFiles(annotations);
     if (referencedFiles.length === 0) {
-      return {
-        success: false,
-        changes: [],
-        undoEntries: [],
-        error: "No source files referenced in annotations",
-      };
+      return { success: false, changes: [], undoEntries: [], error: "No source files referenced in annotations" };
     }
 
-    const sources = readSourceFiles(referencedFiles, projectRoot);
+    // Read files AND capture undo entries BEFORE the API call (#3)
+    const { sources, undoEntries } = readSourceFiles(referencedFiles, projectRoot);
     if (sources.size === 0) {
-      return {
-        success: false,
-        changes: [],
-        undoEntries: [],
-        error: "Could not read any referenced source files",
-      };
+      return { success: false, changes: [], undoEntries: [], error: "Could not read any referenced source files" };
     }
 
-    // 2. Generate — call Claude API
-    onProgress("generating", "Generating code changes...");
-
-    const client = new Anthropic({ apiKey });
+    // 2. Build prompt and estimate tokens (#5)
     const prompt = buildPrompt(annotations, sources);
+    const inputTokens = estimateTokens(prompt);
+    const estimatedOutputTokens = Math.min(inputTokens, 8192); // Conservative estimate
+    const costEstimate = formatCost(inputTokens, estimatedOutputTokens);
+
+    onProgress("generating", `Sending ~${Math.round(inputTokens / 1000)}K tokens to Claude (${costEstimate})...`);
+
+    // 3. Call Claude API
+    const client = new Anthropic({ apiKey });
 
     const response = await client.messages.create({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 8192,
+      max_tokens: 16384,
       messages: [{ role: "user", content: prompt }],
     });
+
+    // Check for truncation (#7)
+    if (response.stop_reason === "max_tokens") {
+      return {
+        success: false,
+        changes: [],
+        undoEntries: [],
+        error: "Response was truncated — too many changes at once. Try generating with fewer annotations.",
+      };
+    }
 
     const responseText = response.content
       .filter((block): block is Anthropic.TextBlock => block.type === "text")
@@ -244,41 +331,32 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
       .join("\n");
 
     if (!responseText) {
-      return {
-        success: false,
-        changes: [],
-        undoEntries: [],
-        error: "Empty response from Claude API",
-      };
+      return { success: false, changes: [], undoEntries: [], error: "Empty response from Claude API" };
     }
 
-    // 3. Apply — parse response and write files
-    onProgress("applying", "Applying changes...");
+    // 4. Parse and validate response (#2)
+    onProgress("applying", "Validating and applying changes...");
 
-    const parsedChanges = parseResponse(responseText, projectRoot);
+    const parsedChanges = parseResponse(responseText);
     if (parsedChanges.length === 0) {
-      return {
-        success: false,
-        changes: [],
-        undoEntries: [],
-        error: "Could not parse any file changes from AI response",
-      };
+      return { success: false, changes: [], undoEntries: [], error: "Could not parse any file changes from AI response" };
     }
 
     const appliedChanges: FileChange[] = [];
-    const undoEntries: Array<{ filePath: string; content: string }> = [];
+    const skippedFiles: string[] = [];
 
     for (const change of parsedChanges) {
       const resolved = path.isAbsolute(change.filePath)
         ? change.filePath
         : path.resolve(projectRoot, change.filePath);
 
-      // Save original for undo
-      try {
-        const original = fs.readFileSync(resolved, "utf-8");
-        undoEntries.push({ filePath: resolved, content: original });
-      } catch {
-        // New file — no undo needed
+      // Validate before writing (#2)
+      const originalContent = sources.get(change.filePath);
+      const validationError = validateChange(change, originalContent, projectRoot);
+      if (validationError) {
+        console.warn(`[SketchUI] Skipping ${change.filePath}: ${validationError}`);
+        skippedFiles.push(`${change.filePath}: ${validationError}`);
+        continue;
       }
 
       // Write the modified content
@@ -289,17 +367,24 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
       });
     }
 
-    onProgress("complete", `Modified ${appliedChanges.length} file(s)`);
+    if (appliedChanges.length === 0) {
+      return {
+        success: false,
+        changes: [],
+        undoEntries: [],
+        error: `All changes failed validation:\n${skippedFiles.join("\n")}`,
+      };
+    }
 
-    return {
-      success: true,
-      changes: appliedChanges,
-      undoEntries,
-    };
+    const msg = skippedFiles.length > 0
+      ? `Modified ${appliedChanges.length} file(s), skipped ${skippedFiles.length}`
+      : `Modified ${appliedChanges.length} file(s)`;
+    onProgress("complete", msg);
+
+    return { success: true, changes: appliedChanges, undoEntries };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
 
-    // Friendly error messages for common failures
     if (message.includes("401") || message.includes("authentication")) {
       return { success: false, changes: [], undoEntries: [], error: "Invalid API key. Check your ANTHROPIC_API_KEY." };
     }

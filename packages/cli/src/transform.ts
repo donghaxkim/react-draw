@@ -4,7 +4,7 @@ import jscodeshift from "jscodeshift";
 import type { SiblingInfo } from "@sketch-ui/shared";
 import { detectQuoteStyle } from "./utils.js";
 
-function getParser(filePath: string): string {
+export function getParser(filePath: string): string {
   const ext = path.extname(filePath);
   return ext === ".tsx" || ext === ".ts" ? "tsx" : "babel";
 }
