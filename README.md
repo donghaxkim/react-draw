@@ -35,7 +35,7 @@ npx frameup <port>
 
 ## Requirements
 
-- Node.js >= 18
+- Node.js >= 20
 - React 18 or 19 (Next.js, Vite, or Create React App)
 - Tailwind CSS
 - Anthropic API key — [get one here](https://console.anthropic.com/settings/keys)
