@@ -6,3 +6,5 @@ packages/overlay/dist/*
 .next/
 *.tsbuildinfo
 .worktrees/
+.env
+.env.local

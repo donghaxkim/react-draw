@@ -1,4 +1,5 @@
 // packages/cli/src/index.ts
+import "dotenv/config";
 import { program } from "commander";
 import chalk from "chalk";
 import open from "open";
