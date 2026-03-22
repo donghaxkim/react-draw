@@ -13,6 +13,7 @@ program
   .argument("[port]", "Dev server port override")
   .option("--no-open", "Don't open browser automatically")
   .option("--host <host>", "Dev server host", "localhost")
+  .option("--api-key <key>", "Anthropic API key (overrides ANTHROPIC_API_KEY env var)")
   .action(async (portArg?: string) => {
     try {
       const opts = program.opts();
@@ -38,7 +39,8 @@ program
 
       // Start WebSocket server
       const wsPort = await getAvailablePort(3457);
-      const sketchServer = createSketchServer(wsPort);
+      const apiKey = opts.apiKey || process.env.ANTHROPIC_API_KEY;
+      const sketchServer = createSketchServer({ port: wsPort, apiKey });
 
       // Start proxy server
       const proxyPort = await getAvailablePort(3456);
@@ -57,6 +59,12 @@ program
         );
         console.log(
           chalk.dim("  WebSocket: ") + chalk.green(`ws://localhost:${wsPort}`)
+        );
+        console.log(
+          chalk.dim("  AI Generate: ") +
+            (apiKey
+              ? chalk.green("enabled") + chalk.dim(` (key: ...${apiKey.slice(-6)})`)
+              : chalk.yellow("disabled") + chalk.dim(" (set ANTHROPIC_API_KEY to enable)"))
         );
         console.log(
           chalk.dim("\n  Press ") +

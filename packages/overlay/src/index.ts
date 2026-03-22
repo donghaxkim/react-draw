@@ -1,5 +1,5 @@
 // packages/overlay/src/index.ts
-import { connect, disconnect } from "./bridge.js";
+import { connect, disconnect, send, onMessage } from "./bridge.js";
 import { mountToolbar, destroyToolbar, setOnEyeToggle, setOnGenerate, setOnCanvasUndo, updateEyeButton, updateGenerateButton, showToast, getShadowRoot } from "./toolbar.js";
 import { initSelection, deactivateSelection, clearSelection } from "./selection.js";
 import { initHighlightCanvas, destroyHighlightCanvas } from "./highlight-canvas.js";
@@ -119,10 +119,40 @@ function init(): void {
     updateEyeButton(next);
   });
 
-  // Generate button (Phase 2A: log to console)
+  // Generate button — sends annotations to CLI → Claude API → writes code
+  let generating = false;
   setOnGenerate(() => {
+    if (generating) return; // Prevent double-click
     const data = serializeAnnotations();
-    console.log("[SketchUI] Generate — serialized annotations:", JSON.stringify(data, null, 2));
+    if (!data.moves.length && !data.annotations.length && !data.colorChanges.length) {
+      showToast("Nothing to generate — make some visual changes first");
+      return;
+    }
+    generating = true;
+    showToast("Generating...");
+    send({ type: "generate", annotations: data });
+  });
+
+  // Handle generate progress + completion from CLI
+  onMessage((msg) => {
+    if (msg.type === "generateProgress") {
+      showToast(msg.message);
+    }
+    if (msg.type === "generateComplete") {
+      generating = false;
+      if (msg.success) {
+        const summary = msg.changes
+          .map((c) => c.description || c.filePath)
+          .join(", ");
+        showToast(`Applied: ${summary}`);
+        // Clear canvas after successful generation — changes are in source now
+        clearAnnotationLayer();
+        clearLassoSelection();
+        resetCanvas();
+      } else {
+        showToast(`Error: ${msg.error || "Generation failed"}`);
+      }
+    }
   });
 
   // Canvas undo (Ctrl+Z) — returns true if handled, false if Pointer mode (Phase 1 source undo)

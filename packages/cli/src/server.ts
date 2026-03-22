@@ -11,6 +11,12 @@ import type {
 import { reorderComponent, getSiblings } from "./transform.js";
 import { updateClassName } from "./transform.js";
 import { resolveTailwindConfig } from "./tailwind-resolver.js";
+import { generate } from "./generate.js";
+
+interface SketchServerOptions {
+  port: number;
+  apiKey?: string;
+}
 
 /**
  * Validate that a file path is within the project root to prevent
@@ -27,7 +33,10 @@ interface SketchServer {
   getActiveClient: () => WebSocket | null;
 }
 
-export function createSketchServer(port: number): SketchServer {
+export function createSketchServer(portOrOptions: number | SketchServerOptions): SketchServer {
+  const { port, apiKey } = typeof portOrOptions === "number"
+    ? { port: portOrOptions, apiKey: undefined }
+    : portOrOptions;
   const wss = new WebSocketServer({ port });
   const projectRoot = path.resolve(process.cwd());
   const undoStack: UndoEntry[] = [];
@@ -223,6 +232,54 @@ export function createSketchServer(port: number): SketchServer {
             send(ws, { type: "siblingsList", siblings: [] });
           }
           break;
+
+        case "generate": {
+          const resolvedKey = apiKey || process.env.ANTHROPIC_API_KEY;
+          if (!resolvedKey) {
+            send(ws, {
+              type: "generateComplete",
+              success: false,
+              changes: [],
+              error: "No API key configured. Set ANTHROPIC_API_KEY in your environment:\n\nexport ANTHROPIC_API_KEY=sk-ant-...",
+            });
+            break;
+          }
+
+          // Run generate async — don't block the queue
+          generate({
+            annotations: msg.annotations,
+            apiKey: resolvedKey,
+            projectRoot: process.cwd(),
+            onProgress(stage, message) {
+              send(ws, { type: "generateProgress", stage, message });
+            },
+          }).then((result) => {
+            // Push undo entries so Ctrl+Z reverts AI changes
+            if (result.success) {
+              for (const entry of result.undoEntries) {
+                undoStack.push({
+                  filePath: entry.filePath,
+                  content: entry.content,
+                  timestamp: Date.now(),
+                });
+              }
+            }
+            send(ws, {
+              type: "generateComplete",
+              success: result.success,
+              changes: result.changes,
+              error: result.error,
+            });
+          }).catch((err) => {
+            send(ws, {
+              type: "generateComplete",
+              success: false,
+              changes: [],
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+          break;
+        }
 
         case "reorder":
         case "undo":

@@ -1,3 +1,10 @@
+export type GenerateStage = "analyzing" | "generating" | "applying" | "complete" | "error";
+
+export interface FileChange {
+  filePath: string;
+  description: string;
+}
+
 export type ClientMessage =
   | {
       type: "reorder";
@@ -10,6 +17,7 @@ export type ClientMessage =
   | { type: "getSiblings"; filePath: string; parentLine: number }
   | { type: "undo" }
   | { type: "ping" }
+  | { type: "generate"; annotations: SerializedAnnotations }
   | {
       type: "updateProperty";
       filePath: string;
@@ -61,7 +69,9 @@ export type ServerMessage =
       error?: string;
       errorCode?: TransformErrorCode;
     }
-  | { type: "tailwindTokens"; tokens: TailwindTokenMap };
+  | { type: "tailwindTokens"; tokens: TailwindTokenMap }
+  | { type: "generateProgress"; stage: GenerateStage; message: string }
+  | { type: "generateComplete"; success: boolean; changes: FileChange[]; error?: string };
 
 export interface ComponentInfo {
   tagName: string;

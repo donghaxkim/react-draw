@@ -27,7 +27,7 @@ let ghosts: Map<string, GhostEntry> = new Map();
 let annotations: Annotation[] = [];
 let undoStack: CanvasUndoAction[] = [];
 let activeTool: ToolType = "pointer";
-let originalsHidden = false;
+let originalsHidden = true;
 
 let toolOptions = {
   brushSize: 4,
