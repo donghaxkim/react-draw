@@ -68,24 +68,25 @@ export function createProxyServer(
       req.headers["accept-encoding"] = "identity";
     }
 
-    proxy.web(req, res);
+    proxy.web(req as any, res as any);
   });
 
   // Handle proxy response — inject script into HTML
-  proxy.on("proxyRes", (proxyRes, req, res) => {
+  proxy.on("proxyRes", (proxyRes, _req, res) => {
     const contentType = proxyRes.headers["content-type"] || "";
     const isHtml = contentType.includes("text/html");
+    const outRes = res as unknown as http.ServerResponse;
 
     if (!isHtml) {
       // Pass through non-HTML responses
-      res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
-      proxyRes.pipe(res);
+      outRes.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+      proxyRes.pipe(outRes);
       return;
     }
 
     // Buffer HTML response for script injection
-    const chunks: Buffer[] = [];
-    proxyRes.on("data", (chunk: Buffer) => chunks.push(chunk));
+    const chunks: Uint8Array[] = [];
+    proxyRes.on("data", (chunk: Uint8Array) => chunks.push(chunk));
     proxyRes.on("end", () => {
       let body = Buffer.concat(chunks).toString("utf-8");
 
@@ -105,17 +106,17 @@ export function createProxyServer(
       delete headers["content-length"];
       headers["content-length"] = String(Buffer.byteLength(body));
 
-      res.writeHead(proxyRes.statusCode || 200, headers);
-      res.end(body);
+      outRes.writeHead(proxyRes.statusCode || 200, headers);
+      outRes.end(body);
     });
   });
 
   // Proxy WebSocket upgrades (for HMR)
   server.on("upgrade", (req, socket, head) => {
-    proxy.ws(req, socket, head);
+    proxy.ws(req as any, socket as any, head);
   });
 
-  proxy.on("error", (err, req, res) => {
+  proxy.on("error", (_err, _req, res) => {
     if (!upstreamDown) {
       upstreamDown = true;
       const client = getActiveClient();
@@ -124,10 +125,9 @@ export function createProxyServer(
       }
     }
     if (res && "writeHead" in res) {
-      (res as http.ServerResponse).writeHead(502, {
-        "Content-Type": "text/plain",
-      });
-      (res as http.ServerResponse).end("Dev server unavailable");
+      const errRes = res as unknown as http.ServerResponse;
+      errRes.writeHead(502, { "Content-Type": "text/plain" });
+      errRes.end("Dev server unavailable");
     }
   });
 
