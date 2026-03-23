@@ -80,9 +80,9 @@ export function applyDragVisual(element: HTMLElement, dx: number, dy: number, ex
 /** Remove dragging visual, settle to final transform. */
 export function settleDragVisual(entry: MoveEntry): void {
   applyMoveTransform(entry);
-  entry.element.style.boxShadow = SHADOWS.sm;
+  entry.element.style.boxShadow = "";
   entry.element.style.transition = "";
-  entry.element.style.zIndex = "2147483644";
+  entry.element.style.zIndex = "";
 }
 
 // ---------------------------------------------------------------------------
