@@ -93,7 +93,7 @@ export function isValidElement(el: Element): boolean {
 
   if (el.closest("#frameup-root")) return false;
   if (el instanceof HTMLElement && el.hasAttribute("data-frameup-interaction")) return false;
-  if (el instanceof HTMLElement && el.hasAttribute("data-frameup-ghost")) return false;
+  if (el instanceof HTMLElement && el.hasAttribute("data-frameup-placeholder")) return false;
 
   const now = performance.now();
   const cached = visibilityCache.get(el);

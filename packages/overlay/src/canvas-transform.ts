@@ -93,7 +93,7 @@ export function initCanvasTransform(): void {
       if (
         child.id === "frameup-root" ||
         child.hasAttribute("data-frameup-interaction") ||
-        child.hasAttribute("data-frameup-ghost") ||
+        child.hasAttribute("data-frameup-placeholder") ||
         child.hasAttribute("data-frameup-annotation") ||
         child.hasAttribute("data-frameup-dot-bg") ||
         child.hasAttribute("data-frameup-canvas-wrapper")

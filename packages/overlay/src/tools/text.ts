@@ -41,7 +41,7 @@ export const textHandler: ToolEventHandler = {
       box-shadow: 0 0 0 3px ${COLORS.accentSoft};
     `;
 
-    activeInput.setAttribute("data-frameup-ghost", "true");
+    activeInput.setAttribute("data-frameup-overlay", "true");
     activeInput.addEventListener("keydown", (ke) => {
       if (ke.key === "Enter") { commitText(); ke.preventDefault(); }
       if (ke.key === "Escape") { cancelText(); ke.preventDefault(); }

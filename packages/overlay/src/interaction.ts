@@ -99,7 +99,7 @@ export function setInteractionPointerEvents(enabled: boolean): void {
 
 /**
  * Find the actual page element at a viewport point, looking through all FrameUp layers.
- * Uses elementsFromPoint to skip the interaction layer, shadow DOM host, and ghost elements.
+ * Uses elementsFromPoint to skip the interaction layer, shadow DOM host, and placeholder elements.
  */
 export function getPageElementAtPoint(clientX: number, clientY: number): HTMLElement | null {
   // Check cache first — avoids expensive elementsFromPoint on small mouse movements
@@ -113,7 +113,7 @@ export function getPageElementAtPoint(clientX: number, clientY: number): HTMLEle
     if (!(el instanceof HTMLElement)) continue;
     if (el.closest("#frameup-root")) continue;
     if (el.hasAttribute("data-frameup-interaction")) continue;
-    if (el.hasAttribute("data-frameup-ghost")) continue;
+    if (el.hasAttribute("data-frameup-placeholder")) continue;
     if (el === document.body || el === document.documentElement) continue;
     result = el;
     break;

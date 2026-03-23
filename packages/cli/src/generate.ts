@@ -161,9 +161,11 @@ function buildUserMessage(
   if (annotations.moves.length > 0) {
     message += `### Component Moves\n`;
     for (const move of annotations.moves) {
-      message += `- **${move.component}** (${move.file}:${move.line}): moved from (${Math.round(move.from.left)}, ${Math.round(move.from.top)}) to (${Math.round(move.to.x)}, ${Math.round(move.to.y)})\n`;
-      const dx = Math.round(move.to.x - move.from.left);
-      const dy = Math.round(move.to.y - move.from.top);
+      const toX = move.originalRect.left + move.delta.dx;
+      const toY = move.originalRect.top + move.delta.dy;
+      message += `- **${move.component}** (${move.file}:${move.line}): moved from (${Math.round(move.originalRect.left)}, ${Math.round(move.originalRect.top)}) to (${Math.round(toX)}, ${Math.round(toY)})\n`;
+      const dx = Math.round(move.delta.dx);
+      const dy = Math.round(move.delta.dy);
       message += `  Offset: ${dx > 0 ? "+" : ""}${dx}px horizontal, ${dy > 0 ? "+" : ""}${dy}px vertical\n`;
     }
     message += `\n`;

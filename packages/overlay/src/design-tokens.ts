@@ -43,7 +43,7 @@ export const RADII = {
 export const TRANSITIONS = {
   fast: "100ms ease",      // color/opacity hover
   medium: "150ms ease",    // fade in/out panels
-  settle: "200ms ease",    // ghost shadow on drop, panel entrance
+  settle: "200ms ease",    // move shadow on drop, panel entrance
 } as const;
 
 // --- Typography ---

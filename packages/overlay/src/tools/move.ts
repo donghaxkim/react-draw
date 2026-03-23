@@ -1,41 +1,37 @@
-// packages/overlay/src/tools/move.ts
 import type { ToolEventHandler } from "../interaction.js";
-import { getSelection, getSelectedElement, selectElementForMove, trackGhostAfterDrop, clearSelection } from "../selection.js";
-import { getGhosts, moveGhost, hasGhostForElement, viewportToPage } from "../canvas-state.js";
-import { createGhost, updateGhostPosition, findGhostAtPoint, setGhostDragging, setGhostSettled } from "../ghost-layer.js";
+import type { MoveEntry } from "../move-state.js";
+import {
+  createPlaceholder,
+  applyDragVisual,
+  settleDragVisual,
+  isOutOfFlow,
+} from "../move-state.js";
+import {
+  addMove,
+  updateMoveDelta,
+  getMoveForElement,
+  hasMoveForElement,
+  viewportToPage,
+} from "../canvas-state.js";
+import { getSelection, getSelectedElement, selectElementForMove, clearSelection } from "../selection.js";
 import { getPageElementAtPoint } from "../interaction.js";
-import type { GhostEntry } from "../canvas-state.js";
 
-let dragTarget: GhostEntry | null = null;
-let dragOffset = { x: 0, y: 0 };
+let dragEntry: MoveEntry | null = null;
+let dragStartMouse = { x: 0, y: 0 };
+let preDragDelta = { dx: 0, dy: 0 };
+let isNewMove = false;
 let isDragging = false;
-let isNewGhost = false; // true when ghost was just created this drag (ghostCreate undo handles removal)
-let preDragPos: { x: number; y: number } | null = null; // position before drag started
-// Pending click-to-select: store element to select on mouseUp if no drag occurs
 let pendingClickEl: HTMLElement | null = null;
 
 export const moveHandler: ToolEventHandler = {
   onMouseDown(e: MouseEvent) {
     pendingClickEl = null;
-    isNewGhost = false;
-    preDragPos = null;
+    isNewMove = false;
+    isDragging = false;
 
-    // Check if clicking an existing ghost — start drag immediately
-    const existingGhost = findGhostAtPoint(e.clientX, e.clientY);
-    if (existingGhost) {
-      dragTarget = existingGhost;
-      preDragPos = { ...existingGhost.currentPos };
-      const page = viewportToPage(e.clientX, e.clientY);
-      dragOffset = {
-        x: page.x - existingGhost.currentPos.x,
-        y: page.y - existingGhost.currentPos.y,
-      };
-      isDragging = true;
-      setGhostDragging(dragTarget.id);
-      return;
-    }
+    const pagePos = viewportToPage(e.clientX, e.clientY);
 
-    // Check what page element is under the cursor
+    // Check if clicking on an already-moved element
     const clickedEl = getPageElementAtPoint(e.clientX, e.clientY);
 
     // Clicking empty space → deselect
@@ -44,78 +40,106 @@ export const moveHandler: ToolEventHandler = {
       return;
     }
 
-    // Check if there's a current selection
+    // Check if the clicked element already has a move entry
+    const existingForClicked = getMoveForElement(clickedEl);
+    if (existingForClicked) {
+      dragEntry = existingForClicked;
+      dragStartMouse = { x: pagePos.x, y: pagePos.y };
+      preDragDelta = { ...existingForClicked.delta };
+      isNewMove = false;
+      isDragging = true;
+      applyDragVisual(existingForClicked.element, existingForClicked.delta.dx, existingForClicked.delta.dy, existingForClicked.existingTransform);
+      return;
+    }
+
+    // Get currently selected element
     const selection = getSelection();
     const selectedEl = getSelectedElement();
 
-    // If clicking a different element than currently selected → switch selection
+    // If clicking a different element than currently selected → switch selection on mouseUp
     if (!selection || !selectedEl || clickedEl !== selectedEl) {
       pendingClickEl = clickedEl;
       return;
     }
 
-    // Clicking the currently selected element → create ghost and start drag
-
-    // Prevent creating duplicate or nested ghosts for the same element
-    if (hasGhostForElement(selectedEl)) {
-      for (const ghost of getGhosts().values()) {
-        if (ghost.originalEl === selectedEl || ghost.originalEl.contains(selectedEl) || selectedEl.contains(ghost.originalEl)) {
-          dragTarget = ghost;
-          preDragPos = { ...ghost.currentPos };
-          const page = viewportToPage(e.clientX, e.clientY);
-          dragOffset = {
-            x: page.x - ghost.currentPos.x,
-            y: page.y - ghost.currentPos.y,
-          };
-          isDragging = true;
-          setGhostDragging(dragTarget.id);
-          return;
-        }
-      }
+    // Clicking the currently selected element → check for existing move or create new
+    const existingMove = getMoveForElement(selectedEl);
+    if (existingMove) {
+      dragEntry = existingMove;
+      dragStartMouse = { x: pagePos.x, y: pagePos.y };
+      preDragDelta = { ...existingMove.delta };
+      isNewMove = false;
+      isDragging = true;
+      applyDragVisual(existingMove.element, existingMove.delta.dx, existingMove.delta.dy, existingMove.existingTransform);
+      return;
     }
 
-    const ghost = createGhost(selectedEl, {
-      componentName: selection.componentName,
-      filePath: selection.filePath,
-      lineNumber: selection.lineNumber,
-    });
+    // Create new move
+    const originalRect = selectedEl.getBoundingClientRect();
+    const originalCssText = selectedEl.style.cssText;
+    const existingTransform = getComputedStyle(selectedEl).transform;
+    const outOfFlow = isOutOfFlow(selectedEl);
 
-    dragTarget = ghost;
-    isNewGhost = true;
-    const page = viewportToPage(e.clientX, e.clientY);
-    dragOffset = {
-      x: page.x - ghost.currentPos.x,
-      y: page.y - ghost.currentPos.y,
+    let placeholder: HTMLElement | null = null;
+    if (!outOfFlow) {
+      placeholder = createPlaceholder(selectedEl);
+      selectedEl.parentNode?.insertBefore(placeholder, selectedEl);
+      selectedEl.style.position = "relative";
+    }
+
+    const entry: MoveEntry = {
+      id: crypto.randomUUID(),
+      componentRef: {
+        componentName: selection.componentName,
+        filePath: selection.filePath,
+        lineNumber: selection.lineNumber,
+      },
+      element: selectedEl,
+      placeholder,
+      originalRect,
+      delta: { dx: 0, dy: 0 },
+      originalCssText,
+      existingTransform: existingTransform === "none" ? "" : existingTransform,
+      identity: {
+        componentName: selection.componentName,
+        filePath: selection.filePath,
+        lineNumber: selection.lineNumber,
+        columnNumber: selection.columnNumber,
+        tagName: selectedEl.tagName.toLowerCase(),
+      },
     };
+
+    addMove(entry);
+    dragEntry = entry;
+    dragStartMouse = { x: pagePos.x, y: pagePos.y };
+    preDragDelta = { dx: 0, dy: 0 };
+    isNewMove = true;
     isDragging = true;
-    setGhostDragging(dragTarget.id);
+
+    applyDragVisual(selectedEl, 0, 0, entry.existingTransform);
   },
 
   onMouseMove(e: MouseEvent) {
-    if (!isDragging || !dragTarget) return;
-    const page = viewportToPage(e.clientX, e.clientY);
-    const pageX = page.x - dragOffset.x;
-    const pageY = page.y - dragOffset.y;
-    updateGhostPosition(dragTarget.id, pageX, pageY);
+    if (!isDragging || !dragEntry) return;
+    const pagePos = viewportToPage(e.clientX, e.clientY);
+    const dx = preDragDelta.dx + (pagePos.x - dragStartMouse.x);
+    const dy = preDragDelta.dy + (pagePos.y - dragStartMouse.y);
+    dragEntry.delta = { dx, dy };
+    applyDragVisual(dragEntry.element, dx, dy, dragEntry.existingTransform);
   },
 
-  onMouseUp(_e: MouseEvent) {
+  onMouseUp() {
     // Complete drag
-    if (isDragging && dragTarget) {
-      if (isNewGhost) {
-        // New ghost: ghostCreate undo already on stack — no need for ghostMove
-        // Just settle the ghost visually
-      } else if (preDragPos) {
-        // Re-drag of existing ghost: record move with the actual pre-drag position
-        moveGhost(dragTarget.id, dragTarget.currentPos, preDragPos);
+    if (isDragging && dragEntry) {
+      if (!isNewMove) {
+        updateMoveDelta(dragEntry.id, dragEntry.delta, preDragDelta);
       }
-      setGhostSettled(dragTarget.id);
-      trackGhostAfterDrop(dragTarget);
+      settleDragVisual(dragEntry);
     }
-    dragTarget = null;
+
+    dragEntry = null;
     isDragging = false;
-    isNewGhost = false;
-    preDragPos = null;
+    isNewMove = false;
 
     // Click-to-select (no drag occurred) — select without sidebar
     if (pendingClickEl) {
