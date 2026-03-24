@@ -59,7 +59,8 @@ export type ClientMessage =
       columnNumber: number;
       originalText: string;
       newText: string;
-    };
+    }
+  | { type: "revertChanges"; undoIds: string[] };
 
 export type ServerMessage =
   | { type: "reorderComplete"; success: boolean; error?: string }
@@ -76,11 +77,13 @@ export type ServerMessage =
       success: boolean;
       error?: string;
       errorCode?: TransformErrorCode;
+      undoId?: string;
     }
   | { type: "tailwindTokens"; tokens: TailwindTokenMap }
   | { type: "generateProgress"; stage: GenerateStage; message: string }
-  | { type: "generateComplete"; success: boolean; changes: FileChange[]; error?: string }
-  | { type: "updateTextComplete"; success: boolean; error?: string; reason?: string };
+  | { type: "generateComplete"; success: boolean; changes: FileChange[]; error?: string; undoIds?: string[] }
+  | { type: "updateTextComplete"; success: boolean; error?: string; reason?: string; undoId?: string }
+  | { type: "revertComplete"; results: Array<{ undoId: string; success: boolean; error?: string }> };
 
 export interface ComponentInfo {
   tagName: string;
@@ -103,9 +106,12 @@ export interface ComponentInfo {
 }
 
 export interface UndoEntry {
+  id: string;
   filePath: string;
-  content: string;
+  content: string;          // beforeContent — the file state before the write
+  afterContent: string;     // the file state after the write — for conflict detection
   timestamp: number;
+  reverted?: boolean;       // marked true when reverted via revertChanges (not removed from stack)
 }
 
 export interface SiblingInfo {
@@ -250,6 +256,27 @@ export type CanvasUndoAction =
       elementIdentity: ElementIdentity;
       originalInnerHTML: string;
     };
+
+// --- Changelog Types ---
+
+export type RevertData =
+  | { type: "cliUndo"; undoIds: string[] }
+  | { type: "moveRemove"; moveId: string }
+  | { type: "annotationRemove"; annotationId: string; originalInnerHTML: string; elementIdentity: ElementIdentity }
+  | { type: "generateUndo"; undoIds: string[] };
+
+export interface ChangeEntry {
+  id: string;
+  timestamp: number;
+  type: "property" | "move" | "textEdit" | "textAnnotation" | "generate";
+  componentName: string;
+  filePath: string;
+  summary: string;
+  state: "active" | "reverted" | "pending";
+  propertyKey?: string;
+  elementIdentity?: ElementIdentity;
+  revertData: RevertData;
+}
 
 export interface SerializedAnnotations {
   moves: Array<{
