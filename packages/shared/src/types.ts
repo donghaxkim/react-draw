@@ -296,6 +296,7 @@ export interface SerializedAnnotations {
     component: string;
     file: string;
     line: number;
+    column: number;
     originalText: string;
     newText: string;
   }>;
