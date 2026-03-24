@@ -8,6 +8,13 @@ import { getActiveTool } from "./canvas-state.js";
 import { addTextEditAnnotation } from "./canvas-state.js";
 import { isInternalName } from "./utils/component-filter.js";
 import { selectElement } from "./selection.js";
+import { addChangeEntry } from "./changelog.js";
+
+// --- Helpers ---
+
+function truncate(text: string, maxLen: number): string {
+  return text.length > maxLen ? text.slice(0, maxLen) + "…" : text;
+}
 
 // --- Blocklist: replaced/void elements where contentEditable is useless ---
 const BLOCKED_TAGS = new Set([
@@ -58,7 +65,19 @@ export function destroyInlineTextEdit(): void {
 }
 
 function handleUpdateTextResponse(msg: Extract<ServerMessage, { type: "updateTextComplete" }>): void {
-  if (!msg.success && msg.reason === "no-match" && pendingCommit) {
+  if (msg.success && msg.undoId && pendingCommit) {
+    // Path A: AST write succeeded — record as active change with undo support
+    const pc = pendingCommit;
+    addChangeEntry({
+      type: "textEdit",
+      componentName: pc.componentInfo.componentName,
+      filePath: pc.componentInfo.filePath,
+      summary: `"${truncate(pc.originalText, 20)}" → "${truncate(pc.newText, 20)}"`,
+      state: "active",
+      revertData: { type: "cliUndo", undoIds: [msg.undoId] },
+    });
+  } else if (!msg.success && msg.reason === "no-match" && pendingCommit) {
+    // Path B-1: AST write returned no-match — fall back to annotation
     const pc = pendingCommit;
     const ann: TextEditAnnotation = {
       type: "textEdit",
@@ -78,6 +97,19 @@ function handleUpdateTextResponse(msg: Extract<ServerMessage, { type: "updateTex
       tagName: pc.tagName,
     };
     addTextEditAnnotation(ann, identity, pc.originalInnerHTML);
+    addChangeEntry({
+      type: "textAnnotation",
+      componentName: ann.componentName,
+      filePath: ann.filePath || "",
+      summary: `"${truncate(ann.originalText, 20)}" → "${truncate(ann.newText, 20)}"`,
+      state: "pending",
+      revertData: {
+        type: "annotationRemove",
+        annotationId: ann.id,
+        originalInnerHTML: pc.originalInnerHTML,
+        elementIdentity: identity,
+      },
+    });
   }
   pendingCommit = null;
 }
@@ -285,7 +317,7 @@ function commitAndExit(): void {
         newText,
       });
     } else {
-      // Path B: No source location — go directly to annotation fallback
+      // Path B-2: No source location — go directly to annotation fallback
       const ann: TextEditAnnotation = {
         type: "textEdit",
         id: `text-edit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -304,6 +336,19 @@ function commitAndExit(): void {
         tagName: componentInfo.tagName,
       };
       addTextEditAnnotation(ann, identity, originalInnerHTML);
+      addChangeEntry({
+        type: "textAnnotation",
+        componentName: ann.componentName,
+        filePath: ann.filePath || "",
+        summary: `"${truncate(ann.originalText, 20)}" → "${truncate(ann.newText, 20)}"`,
+        state: "pending",
+        revertData: {
+          type: "annotationRemove",
+          annotationId: ann.id,
+          originalInnerHTML: originalInnerHTML,
+          elementIdentity: identity,
+        },
+      });
     }
   }
 
