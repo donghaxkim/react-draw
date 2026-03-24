@@ -1,5 +1,10 @@
-import { describe, it, expect } from "vitest";
-import { parseDiffResponse, resolveReplacementOffset } from "../generate.js";
+import { describe, it, expect, vi } from "vitest";
+import { parseDiffResponse, resolveReplacementOffset, validateDiffChange, applyReplacements } from "../generate.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, existsSync: vi.fn(() => true) };
+});
 
 describe("parseDiffResponse", () => {
   it("parses SEARCH/REPLACE with LINES directive", () => {
@@ -140,5 +145,92 @@ describe("resolveReplacementOffset", () => {
   it("multiple occurrences — lines don't match any → returns -1", () => {
     const offset = resolveReplacementOffset(content, '<Button>A</Button>', { start: 99, end: 99 });
     expect(offset).toBe(-1);
+  });
+});
+
+describe("validateDiffChange", () => {
+  it("single occurrence without lines — valid", () => {
+    const result = validateDiffChange(
+      {
+        filePath: "src/App.txt",
+        replacements: [{ search: "<Card>", replace: "<Card large>", lines: undefined }],
+        description: "",
+      },
+      "export default function App() {\n  return <Card>;\n}",
+      "/project",
+    );
+    expect(result).toBeNull();
+  });
+
+  it("multiple occurrences without lines — rejects", () => {
+    const content = "<Button>A</Button>\n<Button>A</Button>";
+    const result = validateDiffChange(
+      {
+        filePath: "src/App.txt",
+        replacements: [{ search: "<Button>A</Button>", replace: "<Button>B</Button>", lines: undefined }],
+        description: "",
+      },
+      content,
+      "/project",
+    );
+    expect(result).toContain("matches 2 locations");
+  });
+
+  it("multiple occurrences with lines — disambiguates", () => {
+    const content = "<Button>A</Button>\n<Button>A</Button>";
+    const result = validateDiffChange(
+      {
+        filePath: "src/App.txt",
+        replacements: [{ search: "<Button>A</Button>", replace: "<Button>B</Button>", lines: { start: 2, end: 2 } }],
+        description: "",
+      },
+      content,
+      "/project",
+    );
+    expect(result).toBeNull();
+  });
+});
+
+describe("applyReplacements", () => {
+  it("applies single replacement", () => {
+    const original = '<Button className="px-2">';
+    const result = applyReplacements(original, [
+      { search: 'className="px-2"', replace: 'className="px-6"', lines: { start: 1, end: 1 } },
+    ]);
+    expect(result).toBe('<Button className="px-6">');
+  });
+
+  it("applies multiple replacements in reverse-offset order", () => {
+    const original = '<div>\n  <A>first</A>\n  <B>second</B>\n</div>';
+    const result = applyReplacements(original, [
+      { search: '<A>first</A>', replace: '<A>changed-first</A>', lines: { start: 2, end: 2 } },
+      { search: '<B>second</B>', replace: '<B>changed-second</B>', lines: { start: 3, end: 3 } },
+    ]);
+    expect(result).toBe('<div>\n  <A>changed-first</A>\n  <B>changed-second</B>\n</div>');
+  });
+
+  it("disambiguates duplicate blocks using lines", () => {
+    const original = '<Button>A</Button>\n<Button>A</Button>';
+    const result = applyReplacements(original, [
+      { search: '<Button>A</Button>', replace: '<Button>B</Button>', lines: { start: 2, end: 2 } },
+    ]);
+    expect(result).toBe('<Button>A</Button>\n<Button>B</Button>');
+  });
+
+  it("fallback: single occurrence without lines applies normally", () => {
+    const original = '<Card>unique</Card>\n<Button>other</Button>';
+    const result = applyReplacements(original, [
+      { search: '<Card>unique</Card>', replace: '<Card>changed</Card>', lines: undefined },
+    ]);
+    expect(result).toBe('<Card>changed</Card>\n<Button>other</Button>');
+  });
+
+  it("handles length-changing replacements correctly (insertion + deletion)", () => {
+    const original = '<div>\n  <Short>x</Short>\n  <VeryLongTagName>content</VeryLongTagName>\n</div>';
+    const result = applyReplacements(original, [
+      { search: '<Short>x</Short>', replace: '<Short>this is now much longer text</Short>', lines: { start: 2, end: 2 } },
+      { search: '<VeryLongTagName>content</VeryLongTagName>', replace: '<V>c</V>', lines: { start: 3, end: 3 } },
+    ]);
+    expect(result).toBe('<div>\n  <Short>this is now much longer text</Short>\n  <V>c</V>\n</div>');
   });
 });
