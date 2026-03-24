@@ -7,6 +7,7 @@ import type {
   ServerMessage,
   UndoEntry,
   TransformErrorCode,
+  TailwindTokenMap,
 } from "@frameup/shared";
 import { reorderComponent, getSiblings } from "./transform.js";
 import { updateClassName } from "./transform.js";
@@ -21,10 +22,25 @@ interface SketchServerOptions {
 /**
  * Validate that a file path is within the project root to prevent
  * path traversal attacks via WebSocket messages.
+ *
+ * React fiber debug info often provides relative paths (e.g. "src/App.tsx")
+ * or Vite-style paths ("/src/App.tsx"). We resolve these against projectRoot
+ * so they map correctly instead of resolving against the CLI's CWD.
  */
 function isPathSafe(filePath: string, projectRoot: string): boolean {
-  const resolved = path.resolve(filePath);
+  const resolved = path.isAbsolute(filePath)
+    ? path.resolve(filePath)
+    : path.resolve(projectRoot, filePath);
   return resolved.startsWith(projectRoot + path.sep) || resolved === projectRoot;
+}
+
+/**
+ * Resolve a file path that may be relative (from React fiber debug info)
+ * to an absolute path within the project root.
+ */
+function resolveFilePath(filePath: string, projectRoot: string): string {
+  if (path.isAbsolute(filePath)) return path.resolve(filePath);
+  return path.resolve(projectRoot, filePath);
 }
 
 interface SketchServer {
@@ -73,20 +89,21 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             send(ws, { type: "reorderComplete", success: false, error: "File path is outside the project root" });
             break;
           }
-          const prevContent = fs.readFileSync(msg.filePath, "utf-8");
+          const resolvedPath = resolveFilePath(msg.filePath, projectRoot);
+          const prevContent = fs.readFileSync(resolvedPath, "utf-8");
           undoStack.push({
-            filePath: msg.filePath,
+            filePath: resolvedPath,
             content: prevContent,
             timestamp: Date.now(),
           });
 
           try {
             const newSource = reorderComponent(
-              msg.filePath,
+              resolvedPath,
               msg.fromLine,
               msg.toLine
             );
-            fs.writeFileSync(msg.filePath, newSource, "utf-8");
+            fs.writeFileSync(resolvedPath, newSource, "utf-8");
             send(ws, { type: "reorderComplete", success: true });
           } catch (err) {
             // Revert undo stack on failure
@@ -121,10 +138,11 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             send(ws, { type: "updatePropertyComplete", success: false, error: "File path is outside the project root" });
             break;
           }
-          const prevContent = fs.readFileSync(msg.filePath, "utf-8");
-          undoStack.push({ filePath: msg.filePath, content: prevContent, timestamp: Date.now() });
+          const resolvedPropPath = resolveFilePath(msg.filePath, projectRoot);
+          const prevContent = fs.readFileSync(resolvedPropPath, "utf-8");
+          undoStack.push({ filePath: resolvedPropPath, content: prevContent, timestamp: Date.now() });
           try {
-            const newSource = updateClassName(msg.filePath, msg.lineNumber, msg.columnNumber, [{
+            const newSource = updateClassName(resolvedPropPath, msg.lineNumber, msg.columnNumber, [{
               tailwindPrefix: msg.tailwindPrefix,
               tailwindToken: msg.tailwindToken,
               value: msg.value,
@@ -132,7 +150,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
               classPattern: msg.classPattern,
               standalone: msg.standalone,
             }]);
-            fs.writeFileSync(msg.filePath, newSource, "utf-8");
+            fs.writeFileSync(resolvedPropPath, newSource, "utf-8");
             send(ws, { type: "updatePropertyComplete", success: true });
           } catch (err) {
             undoStack.pop();
@@ -153,11 +171,12 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             send(ws, { type: "updatePropertyComplete", success: false, error: "File path is outside the project root" });
             break;
           }
-          const prevContent = fs.readFileSync(msg.filePath, "utf-8");
-          undoStack.push({ filePath: msg.filePath, content: prevContent, timestamp: Date.now() });
+          const resolvedPropsPath = resolveFilePath(msg.filePath, projectRoot);
+          const prevContent = fs.readFileSync(resolvedPropsPath, "utf-8");
+          undoStack.push({ filePath: resolvedPropsPath, content: prevContent, timestamp: Date.now() });
           try {
             const newSource = updateClassName(
-              msg.filePath, msg.lineNumber, msg.columnNumber,
+              resolvedPropsPath, msg.lineNumber, msg.columnNumber,
               msg.updates.map((u: { tailwindPrefix: string; tailwindToken: string | null; value: string; relatedPrefixes?: string[]; classPattern?: string; standalone?: boolean }) => ({
                 tailwindPrefix: u.tailwindPrefix,
                 tailwindToken: u.tailwindToken,
@@ -167,7 +186,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
                 standalone: u.standalone,
               }))
             );
-            fs.writeFileSync(msg.filePath, newSource, "utf-8");
+            fs.writeFileSync(resolvedPropsPath, newSource, "utf-8");
             send(ws, { type: "updatePropertyComplete", success: true });
           } catch (err) {
             undoStack.pop();
@@ -199,8 +218,10 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
     activeClient = ws;
 
     // Resolve and send Tailwind tokens
+    let resolvedTokens: TailwindTokenMap | null = null;
     try {
       const config = resolveTailwindConfig(projectRoot);
+      resolvedTokens = config.tokens;
       send(ws, { type: "tailwindTokens", tokens: config.tokens });
     } catch (err) {
       console.warn("[FrameUp] Could not resolve Tailwind config:", err);
@@ -227,7 +248,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             break;
           }
           try {
-            const siblings = getSiblings(msg.filePath, msg.parentLine);
+            const siblings = getSiblings(resolveFilePath(msg.filePath, projectRoot), msg.parentLine);
             send(ws, { type: "siblingsList", siblings });
           } catch (err) {
             send(ws, { type: "siblingsList", siblings: [] });
@@ -253,6 +274,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             annotations: msg.annotations,
             apiKey: resolvedKey,
             projectRoot: projectRoot,
+            tokens: resolvedTokens,
             onProgress(stage, message) {
               send(ws, { type: "generateProgress", stage, message });
             },

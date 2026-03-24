@@ -3,7 +3,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { SerializedAnnotations, FileChange, GenerateStage } from "@frameup/shared";
+import type { SerializedAnnotations, FileChange, GenerateStage, TailwindTokenMap, ResolvedAnnotations, ResolvedValue } from "@frameup/shared";
+import { resolveIntent } from "./resolve-intent.js";
 import jscodeshift from "jscodeshift";
 import { getParser } from "./transform.js";
 
@@ -11,6 +12,7 @@ interface GenerateOptions {
   annotations: SerializedAnnotations;
   apiKey: string;
   projectRoot: string;
+  tokens?: TailwindTokenMap | null;
   onProgress: (stage: GenerateStage, message: string) => void;
 }
 
@@ -97,7 +99,7 @@ function formatCost(inputTokens: number, outputTokens: number): string {
  */
 const SYSTEM_PROMPT = `You are a frontend code modifier for a React application using Tailwind CSS.
 
-The user has made visual changes using a design overlay tool. Your job is to modify the source code to implement these changes.
+The user has made visual changes using a design overlay tool. Your job is to modify the source code to implement these changes. Color values and spacing tokens have been pre-resolved — use them as provided.
 
 ## Rules
 - Only modify the files referenced in the annotations
@@ -109,10 +111,10 @@ The user has made visual changes using a design overlay tool. Your job is to mod
 ## Annotation Type Guidelines
 
 ### Component Moves
-For moves, add appropriate Tailwind positioning or margin classes to achieve the visual offset. Consider whether relative positioning, margin adjustments, or layout changes are most appropriate.
+For moves, the spacing token and nearest sibling context are provided. Choose the appropriate CSS mechanism (margin, padding, gap, positioning) based on the layout context. Consider: Is this element in a flex/grid container? Would gap be more appropriate than margin? Is relative positioning needed?
 
 ### Color Changes
-For color changes, find the closest Tailwind color class. If no exact match, use arbitrary value syntax like \`bg-[#hex]\` or \`text-[#hex]\`.
+Color values are pre-resolved to Tailwind tokens where possible. Use the token name directly for resolved colors. For arbitrary values, use Tailwind arbitrary syntax like \`bg-[#hex]\` or \`text-[#hex]\`.
 
 ### Text Annotations
 Text annotations are instructions from the user. Interpret them as code change requests for the nearest referenced component.
@@ -149,9 +151,122 @@ Rules for SEARCH/REPLACE blocks:
 - Only include files that need changes`;
 
 /**
- * Build the user message for Claude with dynamic annotations and source files (#4).
+ * Build the user message for Claude with resolved annotations (preferred path).
  */
 function buildUserMessage(
+  annotations: ResolvedAnnotations,
+  sources: Map<string, string>,
+): string {
+  let message = `## Visual Changes\n\n`;
+
+  // Moves — with resolved spacing and sibling context
+  if (annotations.moves.length > 0) {
+    message += `### Component Moves\n`;
+    for (const move of annotations.moves) {
+      message += `- **${move.component}** (${move.file}:${move.line}):\n`;
+
+      if (move.resolvedDx) {
+        message += `  ${move.delta.dx > 0 ? "Right" : "Left"} by ${formatResolvedSpacing(move.resolvedDx)}\n`;
+      }
+      if (move.resolvedDy) {
+        message += `  ${move.delta.dy > 0 ? "Down" : "Up"} by ${formatResolvedSpacing(move.resolvedDy)}\n`;
+      }
+
+      const sibs = move.nearestSiblings;
+      const sibParts: string[] = [];
+      if (sibs.left) sibParts.push(`left: ${sibs.left.component} at ${Math.round(sibs.left.distance)}px`);
+      if (sibs.right) sibParts.push(`right: ${sibs.right.component} at ${Math.round(sibs.right.distance)}px`);
+      if (sibs.above) sibParts.push(`above: ${sibs.above.component} at ${Math.round(sibs.above.distance)}px`);
+      if (sibs.below) sibParts.push(`below: ${sibs.below.component} at ${Math.round(sibs.below.distance)}px`);
+      if (sibParts.length > 0) {
+        message += `  Nearest siblings: ${sibParts.join(", ")}\n`;
+      }
+      message += `  Choose the appropriate CSS mechanism for this layout context.\n`;
+    }
+    message += `\n`;
+  }
+
+  // Color changes — tiered phrasing
+  if (annotations.colorChanges.length > 0) {
+    message += `### Color Changes\n`;
+    for (const cc of annotations.colorChanges) {
+      const prop = cc.property === "backgroundColor" ? "background color" : "text color";
+      message += `- **${cc.component}** (${cc.file}:${cc.line}): ${prop} changed from \`${cc.from}\` to ${formatResolvedColor(cc.resolvedTo)}\n`;
+    }
+    message += `\n`;
+  }
+
+  // Draw/text annotations — unchanged from raw version
+  const drawAnns = annotations.annotations.filter(a => a.type === "draw");
+  const textAnns = annotations.annotations.filter(a => a.type === "text");
+
+  if (textAnns.length > 0) {
+    message += `### Text Annotations (User Instructions)\n`;
+    for (const ann of textAnns) {
+      const target = ann.targetComponent
+        ? `near **${ann.targetComponent}** (${ann.targetFile}:${ann.targetLine})`
+        : `at position (${Math.round(ann.position!.x)}, ${Math.round(ann.position!.y)})`;
+      message += `- "${ann.content}" — placed ${target}\n`;
+    }
+    message += `\n`;
+  }
+
+  if (drawAnns.length > 0) {
+    message += `### Drawing Annotations\n`;
+    for (const ann of drawAnns) {
+      const target = ann.startComponent
+        ? `near **${ann.startComponent}** (${ann.startFile}:${ann.startLine})`
+        : "on the page";
+      const points = ann.points?.length ?? 0;
+      message += `- Drawing with ${points} points ${target} (color: ${ann.color})\n`;
+    }
+    message += `\n`;
+  }
+
+  // Source files
+  message += `## Source Files\n\n`;
+  for (const [filePath, content] of sources) {
+    const ext = path.extname(filePath).slice(1) || "tsx";
+    const numberedLines = content
+      .split("\n")
+      .map((line, i) => `${i + 1}: ${line}`)
+      .join("\n");
+    message += `### \`${filePath}\`\n\`\`\`${ext}\n${numberedLines}\n\`\`\`\n\n`;
+  }
+
+  return message;
+}
+
+function formatResolvedSpacing(val: ResolvedValue<number>): string {
+  const absPx = Math.abs(val.raw);
+  if (val.type === "exact") {
+    return `\`spacing-${val.resolved}\` (${val.resolvedValue})`;
+  }
+  if (val.type === "snapped") {
+    return `~\`spacing-${val.resolved}\` (${val.resolvedValue}, actual ${Math.round(absPx)}px)`;
+  }
+  return `${Math.round(absPx)}px (use arbitrary value)`;
+}
+
+function formatResolvedColor(val: ResolvedValue<string>): string {
+  if (val.confidence >= 0.95) {
+    return `\`${val.resolved}\``;
+  }
+  if (val.confidence >= 0.7) {
+    return `approximately \`${val.resolved}\` (user picked \`${val.raw}\`)`;
+  }
+  // Detect alpha colors — tell Claude to use raw values, not Tailwind arbitrary syntax
+  const raw = val.raw;
+  if (raw.startsWith("rgba(") || raw.startsWith("hsla(") || /^#[0-9a-fA-F]{8}$/.test(raw)) {
+    return `\`${raw}\` (alpha channel present — use raw value)`;
+  }
+  return `\`${val.raw}\` (use arbitrary value)`;
+}
+
+/**
+ * Build the user message for Claude with raw annotations (fallback when tokens unavailable).
+ */
+function buildUserMessageRaw(
   annotations: SerializedAnnotations,
   sources: Map<string, string>,
 ): string {
@@ -488,8 +603,15 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
       return { success: false, changes: [], undoEntries: [], error: "Could not read any referenced source files" };
     }
 
-    // 2. Build prompt and estimate tokens (#5)
-    const userMessage = buildUserMessage(annotations, sources);
+    // 2. Resolve intent — deterministic math before the prompt
+    const resolved = options.tokens
+      ? resolveIntent(annotations, options.tokens)
+      : null;
+
+    // 3. Build prompt and estimate tokens (#5)
+    const userMessage = resolved
+      ? buildUserMessage(resolved, sources)
+      : buildUserMessageRaw(annotations, sources);
     const inputTokens = estimateTokens(SYSTEM_PROMPT + userMessage);
     const estimatedOutputTokens = Math.min(inputTokens, 8192); // Conservative estimate
     const costEstimate = formatCost(inputTokens, estimatedOutputTokens);
