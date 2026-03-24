@@ -51,6 +51,14 @@ export type ClientMessage =
         standalone?: boolean;
       }>;
       framework: "tailwind";
+    }
+  | {
+      type: "updateText";
+      filePath: string;
+      lineNumber: number;
+      columnNumber: number;
+      originalText: string;
+      newText: string;
     };
 
 export type ServerMessage =
@@ -71,7 +79,8 @@ export type ServerMessage =
     }
   | { type: "tailwindTokens"; tokens: TailwindTokenMap }
   | { type: "generateProgress"; stage: GenerateStage; message: string }
-  | { type: "generateComplete"; success: boolean; changes: FileChange[]; error?: string };
+  | { type: "generateComplete"; success: boolean; changes: FileChange[]; error?: string }
+  | { type: "updateTextComplete"; success: boolean; error?: string; reason?: string };
 
 export interface ComponentInfo {
   tagName: string;
@@ -218,7 +227,18 @@ export interface ColorOverride {
   toColor: string;
 }
 
-export type Annotation = DrawAnnotation | TextAnnotation | ColorOverride;
+export interface TextEditAnnotation {
+  type: "textEdit";
+  id: string;
+  componentName: string;
+  filePath: string;
+  lineNumber: number;
+  columnNumber: number;
+  originalText: string;
+  newText: string;
+}
+
+export type Annotation = DrawAnnotation | TextAnnotation | ColorOverride | TextEditAnnotation;
 
 // Note: CanvasUndoAction.colorChange omits `element: HTMLElement` from the spec
 // because shared types must be serializable. The overlay package defines
@@ -232,6 +252,12 @@ export type CanvasUndoAction =
       type: "propertyChange";
       elementIdentity: ElementIdentity;
       overrides: Array<{ cssProperty: string; previousValue: string; newValue: string }>;
+    }
+  | {
+      type: "textEditRestore";
+      annotationId: string;
+      elementIdentity: ElementIdentity;
+      originalInnerHTML: string;
     };
 
 export interface SerializedAnnotations {
@@ -265,6 +291,13 @@ export interface SerializedAnnotations {
     from: string;
     to: string;
     pickedToken?: string;
+  }>;
+  textEdits: Array<{
+    component: string;
+    file: string;
+    line: number;
+    originalText: string;
+    newText: string;
   }>;
 }
 
