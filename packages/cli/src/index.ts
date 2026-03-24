@@ -15,6 +15,7 @@ program
   .option("--no-open", "Don't open browser automatically")
   .option("--host <host>", "Dev server host", "localhost")
   .option("--api-key <key>", "Anthropic API key (overrides ANTHROPIC_API_KEY env var)")
+  .option("--model <model>", "Claude model to use", "claude-sonnet-4-20250514")
   .action(async (portArg?: string) => {
     try {
       const opts = program.opts();
@@ -41,7 +42,7 @@ program
       // Start WebSocket server
       const wsPort = await getAvailablePort(3457);
       const apiKey = opts.apiKey || process.env.ANTHROPIC_API_KEY;
-      const sketchServer = createSketchServer({ port: wsPort, apiKey });
+      const sketchServer = createSketchServer({ port: wsPort, apiKey, model: opts.model });
 
       // Start proxy server
       const proxyPort = await getAvailablePort(3456);
@@ -61,10 +62,13 @@ program
         console.log(
           chalk.dim("  WebSocket: ") + chalk.green(`ws://localhost:${wsPort}`)
         );
+        const modelInfo = opts.model !== "claude-sonnet-4-20250514"
+          ? chalk.dim(`, model: ${opts.model}`)
+          : "";
         console.log(
           chalk.dim("  AI Generate: ") +
             (apiKey
-              ? chalk.green("enabled") + chalk.dim(` (key: ...${apiKey.slice(-6)})`)
+              ? chalk.green("enabled") + chalk.dim(` (key: ...${apiKey.slice(-6)}${modelInfo})`)
               : chalk.yellow("disabled") + chalk.dim(" (set ANTHROPIC_API_KEY to enable)"))
         );
         console.log(

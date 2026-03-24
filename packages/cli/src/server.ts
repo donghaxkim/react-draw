@@ -17,6 +17,7 @@ import { generate } from "./generate.js";
 interface SketchServerOptions {
   port: number;
   apiKey?: string;
+  model?: string;
 }
 
 /**
@@ -50,8 +51,8 @@ interface SketchServer {
 }
 
 export function createSketchServer(portOrOptions: number | SketchServerOptions): SketchServer {
-  const { port, apiKey } = typeof portOrOptions === "number"
-    ? { port: portOrOptions, apiKey: undefined }
+  const { port, apiKey, model } = typeof portOrOptions === "number"
+    ? { port: portOrOptions, apiKey: undefined, model: undefined }
     : portOrOptions;
   const wss = new WebSocketServer({ port });
   const projectRoot = path.resolve(process.cwd());
@@ -309,6 +310,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             annotations: msg.annotations,
             apiKey: resolvedKey,
             projectRoot: projectRoot,
+            model: model,
             tokens: resolvedTokens,
             onProgress(stage, message) {
               send(ws, { type: "generateProgress", stage, message });

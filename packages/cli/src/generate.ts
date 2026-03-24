@@ -8,10 +8,13 @@ import { resolveIntent } from "./resolve-intent.js";
 import jscodeshift from "jscodeshift";
 import { getParser } from "./transform.js";
 
+export const DEFAULT_MODEL = "claude-sonnet-4-20250514";
+
 interface GenerateOptions {
   annotations: SerializedAnnotations;
   apiKey: string;
   projectRoot: string;
+  model?: string;
   tokens?: TailwindTokenMap | null;
   onProgress: (stage: GenerateStage, message: string) => void;
 }
@@ -86,7 +89,10 @@ function estimateTokens(text: string): number {
 /**
  * Format estimated cost based on token count (Sonnet pricing).
  */
-function formatCost(inputTokens: number, outputTokens: number): string {
+function formatCost(inputTokens: number, outputTokens: number, model: string): string {
+  if (model !== DEFAULT_MODEL) {
+    return `~${Math.round((inputTokens + outputTokens) / 1000)}K tokens`;
+  }
   // Sonnet pricing: $3/M input, $15/M output
   const cost = (inputTokens / 1_000_000) * 3 + (outputTokens / 1_000_000) * 15;
   if (cost < 0.01) return "<$0.01";
@@ -587,6 +593,7 @@ function validateFullFileChange(
  */
 export async function generate(options: GenerateOptions): Promise<GenerateResult> {
   const { annotations, apiKey, projectRoot, onProgress } = options;
+  const model = options.model || DEFAULT_MODEL;
 
   try {
     // 1. Analyze — collect referenced files and save originals for undo (#3)
@@ -614,7 +621,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
       : buildUserMessageRaw(annotations, sources);
     const inputTokens = estimateTokens(SYSTEM_PROMPT + userMessage);
     const estimatedOutputTokens = Math.min(inputTokens, 8192); // Conservative estimate
-    const costEstimate = formatCost(inputTokens, estimatedOutputTokens);
+    const costEstimate = formatCost(inputTokens, estimatedOutputTokens, model);
 
     onProgress("generating", `Sending ~${Math.round(inputTokens / 1000)}K tokens to Claude (${costEstimate})...`);
 
@@ -622,7 +629,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     const client = new Anthropic({ apiKey });
 
     const response = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: model,
       max_tokens: 16384,
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content: userMessage }],
