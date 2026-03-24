@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { hexToRgb, rgbToLab, deltaE, buildLabCache, resolveColor, buildSpacingCache, resolveSpacing } from "../resolve-intent.js";
+import { hexToRgb, rgbToLab, deltaE, buildLabCache, resolveColor, buildSpacingCache, resolveSpacing, hasAlpha, resolveColorChange } from "../resolve-intent.js";
 
 describe("hexToRgb", () => {
   it("converts black", () => {
@@ -129,5 +129,46 @@ describe("resolveSpacing", () => {
     const result = resolveSpacing(70, cache);
     expect(result.type).toBe("snapped");
     expect(result.resolved).toBe("16");
+  });
+});
+
+describe("hasAlpha", () => {
+  it("detects rgba", () => {
+    expect(hasAlpha("rgba(0,0,0,0.5)")).toBe(true);
+  });
+  it("detects hsla", () => {
+    expect(hasAlpha("hsla(200,50%,50%,0.8)")).toBe(true);
+  });
+  it("detects 8-digit hex", () => {
+    expect(hasAlpha("#3b82f680")).toBe(true);
+  });
+  it("rejects 6-digit hex", () => {
+    expect(hasAlpha("#3b82f6")).toBe(false);
+  });
+  it("rejects rgb", () => {
+    expect(hasAlpha("rgb(0,0,0)")).toBe(false);
+  });
+});
+
+describe("resolveColorChange — pickedToken", () => {
+  const palette = { "blue-500": "#3b82f6", "red-500": "#ef4444" };
+  const cache = buildLabCache(palette);
+
+  it("uses pickedToken when hex matches", () => {
+    const result = resolveColorChange("#3b82f6", "blue-500", palette, cache);
+    expect(result.type).toBe("exact");
+    expect(result.resolved).toBe("blue-500");
+    expect(result.confidence).toBe(1.0);
+  });
+
+  it("clears stale pickedToken when hex was manually edited", () => {
+    const result = resolveColorChange("#ff0000", "blue-500", palette, cache);
+    expect(result.resolved).not.toBe("blue-500");
+  });
+
+  it("falls through to Delta-E when no pickedToken", () => {
+    const result = resolveColorChange("#3a82f6", undefined, palette, cache);
+    expect(result.resolved).toBe("blue-500");
+    expect(result.type).toBe("snapped");
   });
 });

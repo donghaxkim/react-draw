@@ -187,3 +187,43 @@ export function resolveSpacing(px: number, cache: SpacingCache): ResolvedValue<n
 
   return { raw: px, resolved: null, resolvedValue: null, confidence: 0, type: "arbitrary" };
 }
+
+// ---------------------------------------------------------------------------
+// Alpha channel detection
+// ---------------------------------------------------------------------------
+
+export function hasAlpha(color: string): boolean {
+  return (
+    color.startsWith("rgba(") ||
+    color.startsWith("hsla(") ||
+    /^#[0-9a-fA-F]{8}$/.test(color)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Color change resolver — handles pickedToken passthrough and staleness guard
+// ---------------------------------------------------------------------------
+
+export function resolveColorChange(
+  hex: string,
+  pickedToken: string | undefined,
+  paletteForward: Record<string, string>,
+  cache: LabCache,
+): ResolvedValue<string> {
+  // pickedToken passthrough with staleness guard
+  if (pickedToken) {
+    const tokenHex = paletteForward[pickedToken];
+    if (tokenHex && tokenHex.toLowerCase() === hex.toLowerCase()) {
+      return {
+        raw: hex,
+        resolved: pickedToken,
+        resolvedValue: tokenHex,
+        confidence: 1.0,
+        type: "exact",
+      };
+    }
+    // Stale — hex was manually edited after picking swatch. Fall through to Delta-E.
+  }
+
+  return resolveColor(hex, cache);
+}
