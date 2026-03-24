@@ -25,7 +25,7 @@ import { COLORS, SHADOWS, RADII, TRANSITIONS, FONT_FAMILY } from "./design-token
 import { setHoverTarget, setSelectionTarget, setMultiSelectionTargets, clearMultiSelection, isMultiSelectActive, getHandleAtPoint, getSelectionGeometry, type CornerHandle } from "./highlight-canvas.js";
 import { inspect, deselect as deselectProperty, commitAndDeselect, cancel as cancelProperty, hasActiveOverrides, preview, scheduledCommit } from "./properties/property-controller.js";
 import { isPanningActive } from "./interaction.js";
-import { tryStartMove, updateMovePosition, endMove, isMoveDragging, cancelMove } from "./tools/move.js";
+import { tryStartMove, updateMovePosition, endMove } from "./tools/move.js";
 import { hasMoveForElement } from "./canvas-state.js";
 
 // Ensure bippy instrumentation is active so we can read fiber info
