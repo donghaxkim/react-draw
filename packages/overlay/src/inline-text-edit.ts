@@ -242,13 +242,15 @@ function commitAndExit(): void {
 function exitEditMode(): void {
   if (!editingElement) return;
 
-  editingElement.removeAttribute("contenteditable");
-
-  editingElement.style.outline = savedOutline;
-
+  // Remove listeners BEFORE removeAttribute — removing contenteditable
+  // can trigger a synchronous blur event, causing re-entrant commitAndExit
   editingElement.removeEventListener("blur", handleBlur);
   editingElement.removeEventListener("keydown", handleKeydown);
   editingElement.removeEventListener("input", handleInput);
+
+  editingElement.removeAttribute("contenteditable");
+
+  editingElement.style.outline = savedOutline;
 
   activateInteraction(getActiveTool());
 
