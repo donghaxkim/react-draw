@@ -62,7 +62,7 @@ interface ResolvedAnnotations {
     delta: { dx: number; dy: number };
     resolvedDx: ResolvedValue<number> | null;  // null if dx is 0
     resolvedDy: ResolvedValue<number> | null;  // null if dy is 0
-    nearestSiblings: {
+    nearestSiblings: {  // computed by resolve-intent.ts from raw sibling rects
       left?: { component: string; distance: number };
       right?: { component: string; distance: number };
       above?: { component: string; distance: number };
@@ -78,8 +78,7 @@ interface ResolvedAnnotations {
     property: string;
     from: string;
     to: string;
-    resolvedFrom: ResolvedValue<string>;
-    resolvedTo: ResolvedValue<string>;
+    resolvedTo: ResolvedValue<string>;  // only resolve the "to" value — "from" is just a label
     pickedToken?: string;  // if user picked from project swatch, token name carried from pick-time
   }>;
 }
@@ -121,6 +120,8 @@ RGB distance doesn't match human perception. Lab color space is designed so that
 
 If a color change carries a `pickedToken` (set when the user picks from the project color swatches — see Color Picker section), skip Delta-E entirely and emit `{ resolved: pickedToken, confidence: 1.0, type: "exact" }`. This eliminates ambiguity when two tokens map to the same hex value.
 
+**Staleness guard:** If `pickedToken` is present but the committed hex doesn't match the token's hex in the palette, the user picked a swatch then manually edited the hex input. In this case, clear `pickedToken` and fall through to normal Delta-E resolution. Otherwise the generated code would use the token name for a color the user explicitly changed.
+
 ## Spacing Resolver
 
 ### Algorithm
@@ -136,18 +137,33 @@ If a color change carries a `pickedToken` (set when the user picks from the proj
 4. Compute pixel-level distance between input and nearest token
 5. Map to confidence
 
+### Threshold: Relative, Not Fixed
+
+A fixed pixel threshold treats all spacings identically, but 4px off from `spacing-1` (4px) is 100% error while 4px off from `spacing-16` (64px) is 6%. Use a **relative threshold: within 15% of the token's pixel value, capped at 8px.**
+
+```
+threshold = min(tokenPx * 0.15, 8)
+```
+
+Examples:
+- `spacing-1` (4px): threshold = 0.6px — very tight, as intended
+- `spacing-4` (16px): threshold = 2.4px
+- `spacing-8` (32px): threshold = 4.8px
+- `spacing-16` (64px): threshold = 8px (cap)
+- `spacing-96` (384px): threshold = 8px (cap)
+
 ### Confidence Mapping
 
-| Distance (px) | Type | Confidence | Meaning |
-|---------------|------|------------|---------|
+| Distance vs threshold | Type | Confidence | Meaning |
+|-----------------------|------|------------|---------|
 | 0 | exact | 1.0 | Exact token match |
-| 1 | snapped | 0.95 | Essentially the same |
-| 2 | snapped | 0.90 | Very close |
-| 3 | snapped | 0.80 | Close enough |
-| 4 | snapped | 0.75 | Threshold boundary |
-| > 4 | arbitrary | 0 | Intentional custom value |
+| <= 25% of threshold | snapped | 0.95 | Essentially the same |
+| <= 50% of threshold | snapped | 0.90 | Very close |
+| <= 75% of threshold | snapped | 0.80 | Close enough |
+| <= 100% of threshold | snapped | 0.75 | Threshold boundary |
+| > threshold | arbitrary | 0 | Intentional custom value |
 
-Confidence scales linearly from 0.95 (1px) to 0.75 (4px).
+Confidence scales linearly from 0.95 to 0.75 within the threshold range.
 
 ### Edge Cases
 
@@ -159,14 +175,34 @@ Confidence scales linearly from 0.95 (1px) to 0.75 (4px).
 
 The resolver includes nearest sibling distances in resolved move data. This gives Claude layout context for making the margin-vs-gap-vs-positioning decision.
 
-### Data Source
+### Layering: Overlay Captures Geometry, CLI Interprets It
 
-During serialization in the overlay, for each moved element:
+The overlay and CLI have distinct responsibilities:
+- **Overlay (serialization):** Captures raw sibling bounding rects as geometry data. The overlay has live DOM access; the CLI does not.
+- **CLI (resolve-intent.ts):** Computes "nearest sibling in each direction" from the raw rects. This is spatial analysis that only the generate pipeline consumes.
+
+### Serialization (Overlay Side)
+
+Add to `SerializedAnnotations.moves`:
+```typescript
+siblingRects?: Array<{
+  component: string;
+  rect: { top: number; left: number; width: number; height: number };
+}>;
+```
+
+During `serializeAnnotations()`, for each moved element:
 1. Get the parent element's children (siblings)
-2. Temporarily ensure move transforms are applied (the element uses CSS `transform: translate(dx, dy)` for visual positioning — `getBoundingClientRect()` reflects this transformed position). Call `applyMoveTransform()` if not already applied.
-3. For each sibling, compute `getBoundingClientRect()` distances to the moved element's bounding rect
-4. Include the closest sibling in each direction (left, right, above, below) with component name and pixel distance
-5. Restore original transform state if it was changed
+2. Temporarily ensure move transforms are applied (the element uses CSS `transform: translate(dx, dy)` — `getBoundingClientRect()` reflects this). Call `applyMoveTransform()` if not already applied.
+3. For each sibling, capture `getBoundingClientRect()` as raw data
+4. Restore original transform state if it was changed
+
+### Resolution (CLI Side)
+
+In `resolve-intent.ts`, compute nearest sibling in each direction from the raw rects:
+1. For the moved element's final rect (originalRect + delta), compute edge distances to each sibling rect
+2. Pick the closest sibling in each cardinal direction (left, right, above, below)
+3. Populate `nearestSiblings` on `ResolvedAnnotations`
 
 ### Purpose
 
@@ -246,13 +282,14 @@ Pass through unchanged — these are judgment calls for Claude.
 
 | File | Change |
 |------|--------|
-| `packages/cli/src/resolve-intent.ts` | **New** — ResolvedValue type, resolveIntent(), resolveColor(), resolveSpacing(), Lab color math, palette cache |
+| `packages/cli/src/resolve-intent.ts` | **New** — ResolvedValue type, resolveIntent(), resolveColor(), resolveSpacing(), Lab color math, palette cache, nearest sibling computation from raw rects, alpha detection |
 | `packages/cli/src/generate.ts` | Modify — `buildUserMessage()` accepts `ResolvedAnnotations`, tiered prompt phrasing, simplified `SYSTEM_PROMPT` |
 | `packages/shared/src/types.ts` | Add `ResolvedAnnotations`, `ResolvedValue` types. Add optional `pickedToken?: string` to `SerializedAnnotations.colorChanges` entries AND `ResolvedAnnotations.colorChanges` entries |
 | `packages/overlay/src/color-picker.ts` | Add project color swatch section, accept `projectColors` option |
 | `packages/overlay/src/tools/color.ts` | Pass `projectColors` to `openColorPicker()`, carry `pickedToken` when swatch is picked |
 | `packages/overlay/src/bridge.ts` | Expose project colors from the already-stored Tailwind tokens (currently stored via `setCliTokens()`) as `getProjectColors()` — no new storage needed, just a filtered accessor |
-| `packages/overlay/src/canvas-state.ts` | `serializeAnnotations()` includes `pickedToken` and nearest sibling data for moves |
+| `packages/overlay/src/canvas-state.ts` | `serializeAnnotations()` includes `pickedToken` for color changes and raw sibling rects for moves |
+| `packages/shared/src/types.ts` (moves) | Add optional `siblingRects` to `SerializedAnnotations.moves` entries |
 
 ## Testing Strategy
 
@@ -260,10 +297,20 @@ Pass through unchanged — these are judgment calls for Claude.
 - **Spacing resolver unit tests:** Known px → expected token, threshold boundaries, negative deltas, zero axes
 - **Lab conversion tests:** Verify against known RGB→Lab reference values
 - **Integration test:** Full `resolveIntent()` with mock annotations → verify resolved output structure
+- **Round-trip regression tests:** Take a known token (e.g., `blue-500` = `#3b82f6`), perturb slightly (`#3a82f6`), verify it resolves back to `blue-500` with high confidence. Then perturb far (`#ff0000`), verify it resolves as arbitrary. Single assertion pair catches regressions in confidence thresholds, Lab conversion, and Delta-E simultaneously. Same pattern for spacing: `spacing-4` (16px) ± 1px → snapped, ± 20px → arbitrary.
+- **pickedToken staleness test:** Set `pickedToken: "blue-500"` with hex `#ff0000`, verify pickedToken is cleared and Delta-E runs.
+- **Alpha detection test:** Pass `rgba(0,0,0,0.5)` as from/to, verify resolution is skipped and raw values pass through.
 - **Color picker:** Manual testing — verify swatches appear from Tailwind config, tooltip shows token name, picked token carries through
+
+## Alpha Channel Handling
+
+The color resolver only operates on opaque hex colors. If either the "from" or "to" color string contains an alpha component (detected by `rgba(` or `hsla(` prefix, or 8-digit hex), **skip resolution entirely** for that color change. Pass the raw values through to the prompt with an explicit note:
+
+> "NavBar background color changed from `rgba(0,0,0,0.5)` to `rgba(0,0,0,0.8)` (alpha channel present — use raw values)"
+
+This prevents silent data loss where `rgba(0,0,0,0.5)` → `rgba(0,0,0,0.8)` would be resolved as `#000000` → `#000000` (no change detected). The detection is a simple string check before hex conversion — no new color math needed.
 
 ## Known Limitations
 
-- **RGBA/alpha colors:** The color picker's `rgbToHex()` drops alpha channels from `getComputedStyle()` return values (e.g., `rgba(0,0,0,0.5)` → `#000000`). The resolver will match these against opaque palette colors. This is a pre-existing limitation in the color tool, not introduced by this design.
 - **CIE76 accuracy:** CIE76 Delta-E is less accurate than CIEDE2000 for highly saturated colors. The confidence thresholds in this spec are calibrated for CIE76. If upgraded to CIEDE2000 later, thresholds will need recalibration.
 - **Root font size:** Spacing resolver assumes 16px root font size. See the comment requirement in the Spacing Resolver section.
