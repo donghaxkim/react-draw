@@ -18,12 +18,10 @@ export type PropertyChangeRuntime = Extract<CanvasUndoAction, { type: "propertyC
 let moves: Map<string, MoveEntry> = new Map();
 let annotations: Annotation[] = [];
 let undoStack: CanvasUndoAction[] = [];
-let activeTool: ToolType = "pointer";
+let activeTool: ToolType = "select";
 let originalsHidden = true;
 
 let toolOptions = {
-  brushSize: 4,
-  brushColor: "#ef4444",
   fontSize: 16,
   textColor: "#ffffff",
 };
@@ -364,17 +362,7 @@ export function serializeAnnotations(): SerializedAnnotations {
   const textEdits: SerializedAnnotations["textEdits"] = [];
 
   for (const ann of annotations) {
-    if (ann.type === "draw") {
-      anns.push({
-        type: "draw",
-        startComponent: ann.targetComponent?.componentName,
-        startFile: ann.targetComponent?.filePath,
-        startLine: ann.targetComponent?.lineNumber,
-        points: ann.points,
-        color: ann.color,
-        strokeWidth: ann.strokeWidth,
-      });
-    } else if (ann.type === "text") {
+    if (ann.type === "text") {
       anns.push({
         type: "text",
         content: ann.content,
