@@ -255,6 +255,11 @@ function formatResolvedColor(val: ResolvedValue<string>): string {
   if (val.confidence >= 0.7) {
     return `approximately \`${val.resolved}\` (user picked \`${val.raw}\`)`;
   }
+  // Detect alpha colors — tell Claude to use raw values, not Tailwind arbitrary syntax
+  const raw = val.raw;
+  if (raw.startsWith("rgba(") || raw.startsWith("hsla(") || /^#[0-9a-fA-F]{8}$/.test(raw)) {
+    return `\`${raw}\` (alpha channel present — use raw value)`;
+  }
   return `\`${val.raw}\` (use arbitrary value)`;
 }
 

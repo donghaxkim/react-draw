@@ -366,7 +366,7 @@ export function serializeAnnotations(): SerializedAnnotations {
         property: ann.property,
         from: ann.fromColor,
         to: ann.toColor,
-        pickedToken: (ann as any).pickedToken,
+        pickedToken: ann.pickedToken,
       });
     }
   }
