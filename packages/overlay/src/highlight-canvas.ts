@@ -9,6 +9,7 @@
 import { getShadowRoot } from "./toolbar.js";
 import { lerp } from "./utils/lerp.js";
 import { COLORS } from "./design-tokens.js";
+import type { SnapGuides } from "./snap-guides.js";
 
 // --- Constants ---
 const HOVER_LERP_FACTOR = 0.35;
@@ -51,6 +52,7 @@ const HANDLE_STROKE = ACCENT;
 const HANDLE_STROKE_WIDTH = 1.5;
 
 let handlesVisible = true;
+let activeGuides: SnapGuides | null = null;
 
 export type CornerHandle = "tl" | "tr" | "br" | "bl";
 
@@ -120,6 +122,16 @@ export function setSelectionTarget(rect: DOMRect | null, borderRadius: number = 
     selectionAnim.borderRadius = borderRadius;
     selectionAnim.targetOpacity = 1;
   }
+  scheduleFrame();
+}
+
+export function setSnapGuides(guides: SnapGuides): void {
+  activeGuides = guides;
+  scheduleFrame();
+}
+
+export function clearSnapGuides(): void {
+  activeGuides = null;
   scheduleFrame();
 }
 
@@ -213,6 +225,7 @@ export function destroyHighlightCanvas(): void {
   hoverAnim = null;
   selectionAnim = null;
   multiAnims = [];
+  activeGuides = null;
 }
 
 // ─── Internal ────────────────────────────────────────────
@@ -310,6 +323,30 @@ function tick(): void {
   if (selectionAnim) {
     drawRect(ctx, selectionAnim, ACCENT, ACCENT_MEDIUM);
     if (handlesVisible) drawHandlesAt(ctx, selectionAnim.current, selectionAnim.opacity);
+  }
+
+  // Draw snap alignment guides
+  if (activeGuides) {
+    ctx.save();
+    ctx.globalAlpha = 0.6;
+    ctx.strokeStyle = ACCENT;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    if (activeGuides.verticalLine) {
+      const { x, top, bottom } = activeGuides.verticalLine;
+      ctx.beginPath();
+      ctx.moveTo(x, top);
+      ctx.lineTo(x, bottom);
+      ctx.stroke();
+    }
+    if (activeGuides.horizontalLine) {
+      const { y, left, right } = activeGuides.horizontalLine;
+      ctx.beginPath();
+      ctx.moveTo(left, y);
+      ctx.lineTo(right, y);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   // Draw multi-selection: individual rects + handles on union box
