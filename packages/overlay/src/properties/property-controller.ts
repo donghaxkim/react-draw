@@ -20,6 +20,41 @@ const ESSENTIAL_GROUPS: Set<PropertyGroup> = new Set(["layout", "spacing", "size
 // Groups whose CSS properties are deferred until the section is expanded
 const DEFERRED_GROUPS: Set<PropertyGroup> = new Set(["typography", "background"]);
 
+// Tags that are inherently text-oriented
+const TEXT_TAGS = new Set([
+  "h1","h2","h3","h4","h5","h6","p","span","a",
+  "button","label","li","td","th","blockquote","figcaption",
+]);
+
+/**
+ * Determines which property groups are relevant for the given element
+ * based on its computed styles, tag name, and children.
+ * Future: for multi-select, compute intersection of relevant groups across all elements
+ */
+function getRelevantGroups(element: HTMLElement): Set<PropertyGroup> {
+  const groups = new Set<PropertyGroup>(["spacing", "size", "background"] as PropertyGroup[]);
+  const computed = getComputedStyle(element);
+
+  // Layout: flex/grid containers or elements with children (potential containers)
+  const display = computed.display;
+  if (display === "flex" || display === "inline-flex" ||
+      display === "grid" || display === "inline-grid" ||
+      element.children.length > 0) {
+    groups.add("layout");
+  }
+
+  // Typography: text elements or elements with direct text nodes
+  const tagName = element.tagName.toLowerCase();
+  const hasDirectText = Array.from(element.childNodes).some(
+    n => n.nodeType === Node.TEXT_NODE && (n.textContent?.trim() ?? "").length > 0,
+  );
+  if (hasDirectText || TEXT_TAGS.has(tagName)) {
+    groups.add("typography");
+  }
+
+  return groups;
+}
+
 // Timeout for commit result — if no response arrives, assume success
 const COMMIT_RESULT_TIMEOUT_MS = 5_000;
 
@@ -49,6 +84,7 @@ let state = {
   originalValues: new Map<string, string>(),
   activeOverrides: new Map<string, string>(),
   pendingBatch: new Map<string, PendingUpdate>(),
+  showAllGroups: false,
 };
 
 let controls: PropertyControl[] = [];
@@ -257,8 +293,16 @@ function destroyControls(): void {
 function rerenderSections(): void {
   if (!state.selectedElement || !state.componentInfo) return;
   destroyControls();
+
+  const relevantGroups = state.showAllGroups
+    ? null
+    : getRelevantGroups(state.selectedElement);
+  const descriptorsToRender = relevantGroups
+    ? ALL_DESCRIPTORS.filter(d => relevantGroups.has(d.group))
+    : ALL_DESCRIPTORS;
+
   const { container, controls: newControls } = renderSections(
-    ALL_DESCRIPTORS,
+    descriptorsToRender,
     state.currentValues,
     preview,
     scheduledCommit,
@@ -291,6 +335,7 @@ function resetState(): void {
     originalValues: new Map(),
     activeOverrides: new Map(),
     pendingBatch: new Map(),
+    showAllGroups: false,
   };
 }
 
@@ -419,9 +464,19 @@ export function inspect(element: HTMLElement, info: ComponentInfo): void {
     }
   });
 
+  // Determine which groups are relevant for this element
+  const relevantGroups = state.showAllGroups
+    ? null
+    : getRelevantGroups(element);
+
+  // Filter descriptors to only relevant groups
+  const descriptorsToRender = relevantGroups
+    ? ALL_DESCRIPTORS.filter(d => relevantGroups.has(d.group))
+    : ALL_DESCRIPTORS;
+
   // Render sections
   const { container, controls: newControls } = renderSections(
-    ALL_DESCRIPTORS,
+    descriptorsToRender,
     state.currentValues,
     preview,
     scheduledCommit,
@@ -645,4 +700,9 @@ export function commitAndDeselect(): void {
  */
 export function hasActiveOverrides(): boolean {
   return state.activeOverrides.size > 0;
+}
+
+export function setShowAllGroups(showAll: boolean): void {
+  state.showAllGroups = showAll;
+  rerenderSections();
 }
