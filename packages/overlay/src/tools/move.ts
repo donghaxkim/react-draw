@@ -120,16 +120,18 @@ export function endMove(): HTMLElement | null {
   settleDragVisual(dragEntry);
   clearSnapGuides();
 
-  // Add changelog entry — moves are pending (annotation, not source write)
-  addChangeEntry({
-    type: "move",
-    componentName: dragEntry.componentRef.componentName,
-    filePath: dragEntry.componentRef.filePath,
-    summary: `moved (${Math.round(dragEntry.delta.dx)}px, ${Math.round(dragEntry.delta.dy)}px)`,
-    state: "pending",
-    elementIdentity: dragEntry.identity,
-    revertData: { type: "moveRemove", moveId: dragEntry.id },
-  });
+  // Add changelog entry only on the first move — re-drags update the existing entry
+  if (isNewMove) {
+    addChangeEntry({
+      type: "move",
+      componentName: dragEntry.componentRef.componentName,
+      filePath: dragEntry.componentRef.filePath,
+      summary: `moved (${Math.round(dragEntry.delta.dx)}px, ${Math.round(dragEntry.delta.dy)}px)`,
+      state: "pending",
+      elementIdentity: dragEntry.identity,
+      revertData: { type: "moveRemove", moveId: dragEntry.id },
+    });
+  }
 
   const el = dragEntry.element;
   dragEntry = null;
