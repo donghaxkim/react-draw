@@ -558,6 +558,59 @@ export function countOccurrences(text: string, sub: string): number {
 }
 
 /**
+ * Find the character offset of the correct occurrence of `search` in `content`.
+ * Returns the offset, or -1 if disambiguation fails.
+ *
+ * - Single occurrence: returns its offset (ignores lines)
+ * - Multiple occurrences + lines present: returns the one in range
+ * - Multiple occurrences + no lines: returns -1 (ambiguous)
+ * - No occurrences: returns -1
+ */
+export function resolveReplacementOffset(
+  content: string,
+  search: string,
+  lines?: { start: number; end: number },
+): number {
+  // Find all occurrences
+  const offsets: number[] = [];
+  let pos = 0;
+  while ((pos = content.indexOf(search, pos)) !== -1) {
+    offsets.push(pos);
+    pos += search.length;
+  }
+
+  if (offsets.length === 0) return -1;
+  if (offsets.length === 1) return offsets[0];
+
+  // Multiple occurrences — need lines to disambiguate
+  if (!lines) return -1;
+
+  // Build line-start-offset table
+  const lineStarts = [0];
+  for (let i = 0; i < content.length; i++) {
+    if (content[i] === '\n') lineStarts.push(i + 1);
+  }
+
+  // Find which line each occurrence starts on (1-indexed)
+  function lineAt(offset: number): number {
+    let lo = 0, hi = lineStarts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (lineStarts[mid] <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1; // 1-indexed
+  }
+
+  const matching = offsets.filter(o => {
+    const line = lineAt(o);
+    return line >= lines.start && line <= lines.end;
+  });
+
+  return matching.length === 1 ? matching[0] : -1;
+}
+
+/**
  * Apply search/replace blocks to original content sequentially.
  */
 export function applyReplacements(original: string, replacements: Replacement[]): string {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseDiffResponse } from "../generate.js";
+import { parseDiffResponse, resolveReplacementOffset } from "../generate.js";
 
 describe("parseDiffResponse", () => {
   it("parses SEARCH/REPLACE with LINES directive", () => {
@@ -96,5 +96,49 @@ LINES: 20-22
     expect(changes[0].replacements).toHaveLength(2);
     expect(changes[0].replacements[0].lines).toEqual({ start: 5, end: 7 });
     expect(changes[0].replacements[1].lines).toEqual({ start: 20, end: 22 });
+  });
+});
+
+describe("resolveReplacementOffset", () => {
+  const content = [
+    '<div>',                   // line 1
+    '  <Button>A</Button>',    // line 2
+    '  <Card>X</Card>',        // line 3
+    '  <Button>A</Button>',    // line 4
+    '</div>',                  // line 5
+  ].join('\n');
+
+  it("single occurrence — returns offset regardless of lines", () => {
+    const offset = resolveReplacementOffset(content, '<Card>X</Card>', { start: 3, end: 3 });
+    expect(offset).toBe(content.indexOf('<Card>X</Card>'));
+  });
+
+  it("single occurrence — returns offset even with no lines", () => {
+    const offset = resolveReplacementOffset(content, '<Card>X</Card>', undefined);
+    expect(offset).toBe(content.indexOf('<Card>X</Card>'));
+  });
+
+  it("multiple occurrences — disambiguates by line range", () => {
+    const search = '<Button>A</Button>';
+    const firstOffset = content.indexOf(search);
+    const secondOffset = content.indexOf(search, firstOffset + 1);
+
+    expect(resolveReplacementOffset(content, search, { start: 2, end: 2 })).toBe(firstOffset);
+    expect(resolveReplacementOffset(content, search, { start: 4, end: 4 })).toBe(secondOffset);
+  });
+
+  it("multiple occurrences — no lines → returns -1 (ambiguous)", () => {
+    const offset = resolveReplacementOffset(content, '<Button>A</Button>', undefined);
+    expect(offset).toBe(-1);
+  });
+
+  it("no occurrences — returns -1", () => {
+    const offset = resolveReplacementOffset(content, '<NotHere>', { start: 1, end: 5 });
+    expect(offset).toBe(-1);
+  });
+
+  it("multiple occurrences — lines don't match any → returns -1", () => {
+    const offset = resolveReplacementOffset(content, '<Button>A</Button>', { start: 99, end: 99 });
+    expect(offset).toBe(-1);
   });
 });
