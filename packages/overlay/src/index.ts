@@ -275,7 +275,7 @@ function init(): void {
       return;
     }
     const data = serializeAnnotations();
-    if (!data.moves.length && !data.annotations.length && !data.colorChanges.length) {
+    if (!data.moves.length && !data.annotations.length && !data.colorChanges.length && !data.textEdits.length) {
       showToast("Nothing to confirm — make some visual changes first");
       return;
     }

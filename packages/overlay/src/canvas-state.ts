@@ -2,9 +2,10 @@
 import type {
   ToolType, Annotation, DrawAnnotation, TextAnnotation, ColorOverride,
   ComponentRef, CanvasUndoAction, SerializedAnnotations,
+  TextEditAnnotation, ElementIdentity,
 } from "@frameup/shared";
 import type { MoveEntry } from "./move-state.js";
-import { applyMoveTransform, clearMoveTransform } from "./move-state.js";
+import { applyMoveTransform, clearMoveTransform, reacquireMovedElement } from "./move-state.js";
 
 /** Runtime extension of ColorOverride — adds the DOM element reference (not serializable). */
 export type ColorOverrideRuntime = ColorOverride & { targetElement: HTMLElement };
@@ -125,6 +126,21 @@ export function addAnnotation(ann: Annotation): void {
   notifyStateChange();
 }
 
+export function addTextEditAnnotation(
+  ann: TextEditAnnotation,
+  elementIdentity: ElementIdentity,
+  originalInnerHTML: string,
+): void {
+  annotations.push(ann);
+  undoStack.push({
+    type: "textEditRestore",
+    annotationId: ann.id,
+    elementIdentity,
+    originalInnerHTML,
+  });
+  notifyStateChange();
+}
+
 let annotationRemovedCallback: ((id: string) => void) | null = null;
 export function onAnnotationRemoved(fn: (id: string) => void): void {
   annotationRemovedCallback = fn;
@@ -207,6 +223,14 @@ export function canvasUndo(): string | null {
         }
       }
       return "property reverted";
+    }
+    case "textEditRestore": {
+      const el = reacquireMovedElement(action.elementIdentity);
+      if (el) {
+        el.innerHTML = action.originalInnerHTML;
+      }
+      removeAnnotation(action.annotationId);
+      return "text edit reverted";
     }
   }
   return null;
@@ -337,6 +361,7 @@ export function serializeAnnotations(): SerializedAnnotations {
 
   const anns: SerializedAnnotations["annotations"] = [];
   const colorChanges: SerializedAnnotations["colorChanges"] = [];
+  const textEdits: SerializedAnnotations["textEdits"] = [];
 
   for (const ann of annotations) {
     if (ann.type === "draw") {
@@ -368,8 +393,17 @@ export function serializeAnnotations(): SerializedAnnotations {
         to: ann.toColor,
         pickedToken: ann.pickedToken,
       });
+    } else if (ann.type === "textEdit") {
+      textEdits.push({
+        component: ann.componentName,
+        file: ann.filePath,
+        line: ann.lineNumber,
+        column: ann.columnNumber,
+        originalText: ann.originalText,
+        newText: ann.newText,
+      });
     }
   }
 
-  return { moves: serializedMoves, annotations: anns, colorChanges };
+  return { moves: serializedMoves, annotations: anns, colorChanges, textEdits };
 }
