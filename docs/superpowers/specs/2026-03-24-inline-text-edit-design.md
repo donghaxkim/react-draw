@@ -35,7 +35,7 @@ Self-contained module owning the entire edit lifecycle. Independent of tool hand
 - `originalTextContent: string` — snapshot at double-click time, used for diffing on commit
 - `originalInnerHTML: string` — snapshot at double-click time, used as restore point for undo
 - `componentInfo: ComponentInfo | null` — resolved at double-click time via bippy (uses `ComponentInfo` which has `columnNumber`, not `ComponentRef` which lacks it). The `updateText` message pulls `filePath`, `lineNumber`, `columnNumber` from this object.
-- `lastKnownText: string` — updated on every `input` event, used by blur handler (survives HMR detachment)
+- `lastKnownText: string` — updated on every `input` event via `element.textContent` (not `innerText` — `innerText` is layout-dependent and triggers reflow on every keystroke; `textContent` matches what we diff against on commit). Used by blur handler (survives HMR detachment).
 - `savedOutline: string` — element's original outline style, restored on exit
 
 **Lifecycle (4 steps):**
@@ -49,7 +49,7 @@ Self-contained module owning the entire edit lifecycle. Independent of tool hand
    - Set `element.contentEditable = "true"`
    - Save current interaction pointer-events state, then disable: `setInteractionPointerEvents(false)`
    - Suppress FrameUp keyboard shortcuts: import and check `isTextEditing()` in `handleToolShortcut` (in `tools-panel.ts`, not `interaction.ts`) — bail early if true. The element-scoped `stopPropagation()` alone is insufficient because `handleToolShortcut` uses `{ capture: true }` on the document, which fires before the element's keydown.
-   - Focus element, select all text: `window.getSelection().selectAllChildren(element)`
+   - Focus element. For single-line elements: `window.getSelection().selectAllChildren(element)`. For multi-line elements: let the browser's native double-click word selection stand — the user double-clicked a specific word for a reason. (Use the same multi-line detection heuristic from the Behavior section.)
    - Register `blur`, `keydown`, `input` listeners on the element (`input` updates `lastKnownText`)
 
 2. **User edits text** — browser handles everything natively
@@ -74,8 +74,11 @@ Self-contained module owning the entire edit lifecycle. Independent of tool hand
 - `Escape` → `commitAndExit()`
 - All other keys → `stopPropagation()` to prevent FrameUp shortcuts (tool switching etc.), but let the event reach the element for normal typing
 
+**Double-click while already editing:**
+- If `editingElement` is non-null when `dblclick` fires, call `commitAndExit()` on the current element first, then `enterEditMode(newElement)`. This prevents the first element from getting stuck in contentEditable.
+
 **Double-click target resolution:**
-- Use `getPageElementAtPoint(e.clientX, e.clientY)` from `interaction.ts` to find the real page element (skips frameup layers)
+- Use the event target (`e.target`) directly when it's a page element (not the interaction layer, document, or frameup overlay). Only fall back to `getPageElementAtPoint(e.clientX, e.clientY)` when `e.target` is the interaction layer or document. This avoids a redundant hit-test and prevents mismatches between event bubbling and `elementsFromPoint` rendering order.
 - The `dblclick` listener must be on the document (not the interaction layer) since the interaction layer may have `pointer-events: none` in pointer mode
 
 ### 2. Persistence — Two-Path Routing
@@ -215,9 +218,9 @@ Also update `hasChanges()` to account for text edit annotations.
 - **Empty text after edit:** If user deletes all text and commits, treat as a valid edit — send empty string. The AST transform or Claude can decide what to do.
 - **Elements inside Shadow DOM:** Skip — FrameUp's own UI should not be editable. Already handled by `getPageElementAtPoint()` which filters overlay elements. No additional `closest()` check needed (it wouldn't cross the shadow boundary anyway).
 - **Non-text elements:** If `textContent.trim()` is empty (images, empty divs), don't enter edit mode.
-- **Replaced elements** (`<img>`, `<input>`, `<video>`, `<iframe>`, `<canvas>`, `<select>`, `<textarea>`): `contentEditable` doesn't work on these. Skip them — check against a tag-name blocklist (not `contentEditable !== undefined`, which is always true for HTMLElements).
+- **Replaced elements** (`<img>`, `<input>`, `<video>`, `<iframe>`, `<canvas>`, `<select>`, `<textarea>`, `<hr>`, `<br>`, `<embed>`, `<object>`, `<progress>`): `contentEditable` doesn't work usefully on these. Skip them — check against a `Set` blocklist for O(1) lookup (not `contentEditable !== undefined`, which is always true for HTMLElements).
 - **Undo for AST writes:** CLI undo stack (same as property changes). Ctrl+Z in the CLI restores the file.
-- **Undo for annotation fallback:** Canvas undo stack. Ctrl+Z removes the annotation, restores `originalInnerHTML` on the element.
+- **Undo for annotation fallback:** Canvas undo stack. Ctrl+Z removes the annotation and restores `originalInnerHTML` on the element. If HMR has fired since the edit, the element reference may be stale — use `ElementIdentity`-based re-acquisition (find element by component name, file path, line number — same pattern as the property controller) before restoring innerHTML. Without this, undo after HMR silently fails.
 
 ## Files Changed
 
