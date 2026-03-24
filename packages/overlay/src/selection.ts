@@ -25,6 +25,8 @@ import { COLORS, SHADOWS, RADII, TRANSITIONS, FONT_FAMILY } from "./design-token
 import { setHoverTarget, setSelectionTarget, setMultiSelectionTargets, clearMultiSelection, isMultiSelectActive, getHandleAtPoint, getSelectionGeometry, type CornerHandle } from "./highlight-canvas.js";
 import { inspect, deselect as deselectProperty, commitAndDeselect, cancel as cancelProperty, hasActiveOverrides, preview, scheduledCommit } from "./properties/property-controller.js";
 import { isPanningActive } from "./interaction.js";
+import { tryStartMove, updateMovePosition, endMove, isMoveDragging, cancelMove } from "./tools/move.js";
+import { hasMoveForElement } from "./canvas-state.js";
 
 // Ensure bippy instrumentation is active so we can read fiber info
 if (!isInstrumentationActive()) {
@@ -162,7 +164,7 @@ let selectionLabel: HTMLDivElement | null = null;
 let marqueeBox: HTMLDivElement | null = null;
 
 // Interaction state machine
-type InteractionMode = "idle" | "pending" | "marquee" | "pending-drag" | "drag" | "resize-drag";
+type InteractionMode = "idle" | "pending" | "marquee" | "pending-move" | "move-drag" | "resize-drag";
 let mode: InteractionMode = "idle";
 let mouseDownPos: { x: number; y: number } | null = null;
 let mouseDownElement: HTMLElement | null = null;
@@ -348,7 +350,21 @@ function handleMouseDown(e: MouseEvent): void {
   mouseDownElement = el;
   isShiftClick = e.shiftKey;
 
-  // Always use "pending" mode — clicking selects, dragging does marquee.
+  // If clicking on an element that already has a move entry → start re-drag immediately
+  if (hasMoveForElement(el)) {
+    if (tryStartMove(e.clientX, e.clientY, el)) {
+      mode = "move-drag";
+      return;
+    }
+  }
+
+  // If clicking on the currently selected element (not shift-click) → prepare for possible move-drag
+  if (!isShiftClick && selectedElement && el === selectedElement) {
+    mode = "pending-move";
+    return;
+  }
+
+  // Clicking unselected element → pending (may become marquee or click-to-select)
   mode = "pending";
 }
 
@@ -406,6 +422,30 @@ function handleMouseMove(e: MouseEvent): void {
       preview("height", `${newHeight}px`);
       updateSelectionPosition();
     }
+    return;
+  }
+
+  // Pending-move → move-drag (drag threshold for selected element)
+  if (mode === "pending-move" && mouseDownPos) {
+    const dx = Math.abs(e.clientX - mouseDownPos.x);
+    const dy = Math.abs(e.clientY - mouseDownPos.y);
+    if (dx > 4 || dy > 4) {
+      // Exceeded drag threshold — start move
+      if (mouseDownElement && tryStartMove(mouseDownPos.x, mouseDownPos.y, mouseDownElement)) {
+        mode = "move-drag";
+        // Immediately update to current mouse position
+        updateMovePosition(e.clientX, e.clientY);
+      } else {
+        // Couldn't start move — fall back to marquee
+        mode = "marquee";
+      }
+    }
+    return;
+  }
+
+  // Active move-drag — update position
+  if (mode === "move-drag") {
+    updateMovePosition(e.clientX, e.clientY);
     return;
   }
 
@@ -473,6 +513,23 @@ function handleMouseUp(e: MouseEvent): void {
     } else {
       scheduledCommit();
     }
+    return;
+  }
+
+  // Complete move-drag
+  if (prevMode === "move-drag") {
+    const movedEl = endMove();
+    if (movedEl) selectElementForMove(movedEl);
+    mouseDownPos = null;
+    mouseDownElement = null;
+    return;
+  }
+
+  // Pending-move that didn't exceed threshold → treat as click (re-select)
+  if (prevMode === "pending-move") {
+    // Already selected — no action needed
+    mouseDownPos = null;
+    mouseDownElement = null;
     return;
   }
 
