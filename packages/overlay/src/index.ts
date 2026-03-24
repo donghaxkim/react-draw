@@ -1,7 +1,7 @@
 // packages/overlay/src/index.ts
 import { connect, disconnect, send, onMessage } from "./bridge.js";
 import { mountToolbar, destroyToolbar, setOnEyeToggle, setOnGenerate, setOnCanvasUndo, updateEyeButton, updateGenerateButton, showToast, getShadowRoot } from "./toolbar.js";
-import { initSelection, deactivateSelection, clearSelection } from "./selection.js";
+import { initSelection, deactivateSelection, clearSelection, setEnabled } from "./selection.js";
 import { initHighlightCanvas, destroyHighlightCanvas } from "./highlight-canvas.js";
 import { initDrag, deactivateDrag } from "./drag.js";
 import { initAnnotationLayer, destroyAnnotationLayer, clearAnnotationLayer, removeAnnotationElement } from "./annotation-layer.js";
@@ -23,10 +23,6 @@ import {
   getMoves, removeMove,
 } from "./canvas-state.js";
 import { initPropertyController } from "./properties/property-controller.js";
-import { activatePointer, deactivatePointer } from "./tools/pointer.js";
-import { grabHandler } from "./tools/grab.js";
-import { moveHandler } from "./tools/move.js";
-import { drawHandler } from "./tools/draw.js";
 import { textHandler, cleanupTextTool } from "./tools/text.js";
 import { initInlineTextEdit, destroyInlineTextEdit } from "./inline-text-edit.js";
 import { initCanvasTransform, destroyCanvasTransform, resetCanvasTransform } from "./canvas-transform.js";
@@ -217,26 +213,25 @@ function init(): void {
   initInteraction();
   showOnboardingHint();
 
-  // Register tool handlers with interaction layer
-  registerToolHandler("grab", grabHandler);
-  registerToolHandler("move", moveHandler);
-  registerToolHandler("draw", drawHandler);
+  // Select tool uses selection.ts capture-phase listeners directly (no interaction handler needed).
+  // Only text tool needs an interaction handler.
   registerToolHandler("text", textHandler);
 
   // Tool change listener — handles mode switching
   onToolChange((tool, prev) => {
-    dismissOnboarding(); // Dismiss onboarding on any tool interaction
+    dismissOnboarding();
     flashToolButton(tool);
+
     // Cleanup previous tool
-    if (prev === "pointer") deactivatePointer();
     if (prev === "text") cleanupTextTool();
 
     // Clear caches on tool switch
     clearElementCache();
     clearVisibilityCache();
 
-    // Activate new tool
-    if (tool === "pointer") activatePointer();
+    // Enable/disable selection capture-phase listeners based on tool
+    setEnabled(tool === "select");
+
     activateInteraction(tool);
     updateActiveToolUI(tool);
   });
