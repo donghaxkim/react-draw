@@ -566,8 +566,12 @@ export function updateTextContent(
   for (let i = 0; i < children.length; i++) {
     const child = children[i];
     if (child.type === "JSXText") {
-      if (child.value.trim() === originalText.trim()) {
-        child.value = child.value.replace(child.value.trim(), newText);
+      const trimmed = child.value.trim();
+      if (trimmed === originalText.trim()) {
+        const idx = child.value.indexOf(trimmed);
+        const prefixWs = child.value.slice(0, idx);
+        const suffixWs = child.value.slice(idx + trimmed.length);
+        child.value = prefixWs + newText + suffixWs;
         return root.toSource({ quote: quoteStyle });
       }
     }
