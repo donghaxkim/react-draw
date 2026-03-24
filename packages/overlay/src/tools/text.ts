@@ -12,8 +12,12 @@ let targetComp: ComponentRef | null = null;
 
 export const textHandler: ToolEventHandler = {
   onMouseDown(e: MouseEvent) {
-    // If there's an active input, commit it first
-    if (activeInput) commitText();
+    // If there's an active input, commit it and stop — don't create a new one on the same click.
+    // The user must click again to start a new text annotation.
+    if (activeInput) {
+      commitText();
+      return;
+    }
 
     const page = viewportToPage(e.clientX, e.clientY);
     clickPos = { pageX: page.x, pageY: page.y };
