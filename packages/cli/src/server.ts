@@ -238,6 +238,41 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
           }
           break;
         }
+
+        case "revertChanges": {
+          const results: Array<{ undoId: string; success: boolean; error?: string }> = [];
+
+          // Process in reverse order — later changes undone first
+          const entriesToRevert = msg.undoIds
+            .map((id: string) => ({ id, entry: undoStack.find((e) => e.id === id) }))
+            .filter((r): r is { id: string; entry: UndoEntry } => r.entry !== undefined)
+            .sort((a, b) => b.entry.timestamp - a.entry.timestamp);
+
+          for (const { id, entry } of entriesToRevert) {
+            try {
+              const currentContent = fs.readFileSync(entry.filePath, "utf-8");
+              if (currentContent !== entry.afterContent) {
+                results.push({ undoId: id, success: false, error: "File has changed since this edit" });
+                continue;
+              }
+              fs.writeFileSync(entry.filePath, entry.content, "utf-8");
+              entry.reverted = true;
+              results.push({ undoId: id, success: true });
+            } catch (err) {
+              results.push({ undoId: id, success: false, error: err instanceof Error ? err.message : String(err) });
+            }
+          }
+
+          // Add undoIds that weren't found
+          for (const id of msg.undoIds) {
+            if (!results.some((r) => r.undoId === id)) {
+              results.push({ undoId: id, success: false, error: "Undo entry not found" });
+            }
+          }
+
+          send(ws, { type: "revertComplete", results });
+          break;
+        }
       }
     } catch (err) {
       // Catch-all for unexpected errors
@@ -359,6 +394,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
         case "updateProperty":
         case "updateProperties":
         case "updateText":
+        case "revertChanges":
           // Sequential processing
           queue.push({ msg, ws });
           processQueue();
