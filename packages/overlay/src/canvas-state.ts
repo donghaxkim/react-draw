@@ -90,6 +90,14 @@ export function updateMoveDelta(id: string, delta: { dx: number; dy: number }, p
   pushUndoAction({ type: "moveDelta", moveId: id, previousDelta });
 }
 
+export function restoreMoveDelta(id: string, previousDelta: { dx: number; dy: number }): void {
+  const entry = moves.get(id);
+  if (!entry) return;
+  entry.delta = previousDelta;
+  applyMoveTransform(entry);
+  notifyStateChange();
+}
+
 export function removeMove(id: string): void {
   const entry = moves.get(id);
   if (!entry) return;

@@ -70,12 +70,20 @@ function handleUpdateTextResponse(msg: Extract<ServerMessage, { type: "updateTex
   if (msg.success && msg.undoId && pendingCommit) {
     // Path A: AST write succeeded — record as active change with undo support
     const pc = pendingCommit;
+    const identity: ElementIdentity = {
+      componentName: pc.componentInfo.componentName,
+      filePath: pc.componentInfo.filePath,
+      lineNumber: pc.componentInfo.lineNumber,
+      columnNumber: pc.componentInfo.columnNumber,
+      tagName: pc.tagName,
+    };
     addChangeEntry({
       type: "textEdit",
       componentName: pc.componentInfo.componentName,
       filePath: pc.componentInfo.filePath,
       summary: `"${truncate(pc.originalText, 20)}" → "${truncate(pc.newText, 20)}"`,
       state: "active",
+      elementIdentity: identity,
       revertData: { type: "cliUndo", undoIds: [msg.undoId] },
     });
   } else if (!msg.success && msg.reason === "no-match" && pendingCommit) {
@@ -105,6 +113,7 @@ function handleUpdateTextResponse(msg: Extract<ServerMessage, { type: "updateTex
       filePath: ann.filePath || "",
       summary: `"${truncate(ann.originalText, 20)}" → "${truncate(ann.newText, 20)}"`,
       state: "pending",
+      elementIdentity: identity,
       revertData: {
         type: "annotationRemove",
         annotationId: ann.id,
@@ -392,6 +401,7 @@ function commitAndExit(options?: {
         filePath: ann.filePath || "",
         summary: `"${truncate(ann.originalText, 20)}" → "${truncate(ann.newText, 20)}"`,
         state: "pending",
+        elementIdentity: identity,
         revertData: {
           type: "annotationRemove",
           annotationId: ann.id,

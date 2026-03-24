@@ -260,8 +260,10 @@ export type CanvasUndoAction =
 // --- Changelog Types ---
 
 export type RevertData =
+  | { type: "noop" }
   | { type: "cliUndo"; undoIds: string[] }
   | { type: "moveRemove"; moveId: string }
+  | { type: "moveRestore"; moveId: string; previousDelta: { dx: number; dy: number } }
   | { type: "annotationRemove"; annotationId: string; originalInnerHTML: string; elementIdentity: ElementIdentity }
   | { type: "generateUndo"; undoIds: string[] };
 

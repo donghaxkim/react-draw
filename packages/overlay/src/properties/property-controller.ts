@@ -6,7 +6,7 @@ import { createSidebar } from "./property-sidebar.js";
 import { getTokenMap, resolveTokenForValue } from "./tailwind-resolver.js";
 import type { MergedTokenMap } from "./tailwind-resolver.js";
 import { send, onCommitResult, onMessage } from "../bridge.js";
-import { addOrCoalescePropertyEntry } from "../changelog.js";
+import { addChangeEntry } from "../changelog.js";
 import type { PropertyControl } from "./controls/types.js";
 import { pushUndoAction, type PropertyChangeRuntime } from "../canvas-state.js";
 import { dismissOnboarding } from "../onboarding.js";
@@ -449,21 +449,16 @@ export function initPropertyController(shadowRoot: ShadowRoot): void {
       };
 
       for (const update of batch) {
-        addOrCoalescePropertyEntry(
-          {
-            type: "property",
-            componentName: componentInfo.componentName,
-            filePath: componentInfo.filePath,
-            summary: `${update.cssProperty}: ${update.originalValue} → ${update.value}`,
-            state: "active",
-            propertyKey: update.cssProperty,
-            elementIdentity: identity,
-            revertData: { type: "cliUndo", undoIds: [msg.undoId] },
-          },
-          identity,
-          update.cssProperty,
-          msg.undoId,
-        );
+        addChangeEntry({
+          type: "property",
+          componentName: componentInfo.componentName,
+          filePath: componentInfo.filePath,
+          summary: `${update.cssProperty}: ${update.originalValue} → ${update.value}`,
+          state: "active",
+          propertyKey: update.cssProperty,
+          elementIdentity: identity,
+          revertData: { type: "cliUndo", undoIds: [msg.undoId] },
+        });
       }
       lastCommitSnapshot = null;
     }

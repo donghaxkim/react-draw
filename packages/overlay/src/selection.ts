@@ -27,6 +27,7 @@ import { inspect, deselect as deselectProperty, commitAndDeselect, cancel as can
 import { isPanningActive } from "./interaction.js";
 import { tryStartMove, updateMovePosition, endMove } from "./tools/move.js";
 import { hasMoveForElement } from "./canvas-state.js";
+import { isTextEditing } from "./inline-text-edit.js";
 
 // Ensure bippy instrumentation is active so we can read fiber info
 if (!isInstrumentationActive()) {
@@ -144,6 +145,27 @@ function resolveComponentSync(el: HTMLElement): ResolvedComponent | null {
   const fiber = getFiberFromHostInstance(el);
   if (!fiber) return null;
   return resolveComponentFromFiberWalk(el, fiber);
+}
+
+function buildFallbackSelection(el: HTMLElement): ResolvedComponent {
+  const tagName = el.tagName.toLowerCase();
+  const dataName = el.getAttribute("data-component-name")?.trim();
+  const ariaLabel = el.getAttribute("aria-label")?.trim();
+  const textLabel = el.textContent?.trim();
+  const componentName =
+    dataName ||
+    ariaLabel ||
+    (textLabel ? textLabel.slice(0, 24) : "") ||
+    `<${tagName}>`;
+
+  return {
+    tagName,
+    componentName,
+    filePath: "",
+    lineNumber: 0,
+    columnNumber: 0,
+    stack: [],
+  };
 }
 
 
@@ -279,6 +301,7 @@ export function initSelection(): void {
 
 function handleMouseDown(e: MouseEvent): void {
   if (!isActive) return;
+  if (isTextEditing()) return;
   if (isPanningActive()) return;
 
   // Cmd+click (Mac) or Ctrl+click (Win/Linux) → let browser handle (follow links, etc.)
@@ -370,6 +393,7 @@ function handleMouseDown(e: MouseEvent): void {
 
 function handleMouseMove(e: MouseEvent): void {
   if (!isActive) return;
+  if (isTextEditing()) return;
   if (isPanningActive()) return;
 
   // Resize drag — compute new width/height from mouse delta
@@ -497,6 +521,7 @@ function handleMouseMove(e: MouseEvent): void {
 
 function handleMouseUp(e: MouseEvent): void {
   if (!isActive) return;
+  if (isTextEditing()) return;
   if (isPanningActive()) return;
 
   const prevMode = mode;
@@ -571,9 +596,8 @@ export async function selectElement(el: HTMLElement, options?: { skipSidebar?: b
     showSelectionOverlay(displayRect, {} as any);
     hideHoverOverlay();
 
-    const resolved = await resolveComponentFromElement(el);
-    console.log("[FrameUp] selectElement:", el.tagName, "→", resolved?.componentName, resolved?.filePath, "stack:", resolved?.stack?.map(s => s.componentName));
-    if (!resolved) return;
+    const resolved = (await resolveComponentFromElement(el)) ?? buildFallbackSelection(el);
+    console.log("[FrameUp] selectElement:", el.tagName, "→", resolved.componentName, resolved.filePath, "stack:", resolved.stack?.map(s => s.componentName));
 
     currentSelection = {
       tagName: resolved.tagName,
@@ -781,6 +805,7 @@ function updateMultiSelectionHighlights(): void {
 
 function handleClick(e: MouseEvent): void {
   if (!isActive) return;
+  if (isTextEditing()) return;
   // Ctrl/Cmd+click → let browser follow links normally
   if (e.metaKey || e.ctrlKey) return;
   // Block all other clicks (prevents link navigation, form submission, etc.)

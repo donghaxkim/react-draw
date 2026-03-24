@@ -114,26 +114,29 @@ export function updateMovePosition(clientX: number, clientY: number): void {
 export function endMove(): HTMLElement | null {
   if (!dragEntry) return null;
 
+  const entry = dragEntry;
+  const previousDelta = { ...preDragDelta };
+  const nextDelta = { ...entry.delta };
+
   if (!isNewMove) {
-    updateMoveDelta(dragEntry.id, dragEntry.delta, preDragDelta);
+    updateMoveDelta(entry.id, nextDelta, previousDelta);
   }
-  settleDragVisual(dragEntry);
+  settleDragVisual(entry);
   clearSnapGuides();
 
-  // Add changelog entry only on the first move — re-drags update the existing entry
-  if (isNewMove) {
-    addChangeEntry({
-      type: "move",
-      componentName: dragEntry.componentRef.componentName,
-      filePath: dragEntry.componentRef.filePath,
-      summary: `moved (${Math.round(dragEntry.delta.dx)}px, ${Math.round(dragEntry.delta.dy)}px)`,
-      state: "pending",
-      elementIdentity: dragEntry.identity,
-      revertData: { type: "moveRemove", moveId: dragEntry.id },
-    });
-  }
+  addChangeEntry({
+    type: "move",
+    componentName: entry.componentRef.componentName,
+    filePath: entry.componentRef.filePath,
+    summary: `moved (${Math.round(nextDelta.dx)}px, ${Math.round(nextDelta.dy)}px)`,
+    state: "pending",
+    elementIdentity: entry.identity,
+    revertData: isNewMove
+      ? { type: "moveRemove", moveId: entry.id }
+      : { type: "moveRestore", moveId: entry.id, previousDelta },
+  });
 
-  const el = dragEntry.element;
+  const el = entry.element;
   dragEntry = null;
   isNewMove = false;
   return el;

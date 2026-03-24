@@ -1,12 +1,15 @@
-import type { ChangeEntry, ElementIdentity } from "@frameup/shared";
+import type { ChangeEntry } from "@frameup/shared";
 import { send, onMessage } from "./bridge.js";
 import { COLORS, SHADOWS, RADII, TRANSITIONS, FONT_FAMILY } from "./design-tokens.js";
 import { showToast } from "./toolbar.js";
+import { selectElement } from "./selection.js";
+import { reacquireMovedElement, reacquireMovedElementAsync } from "./move-state.js";
 
 // --- State ---
 
 const entries = new Map<string, ChangeEntry>();
 let panelOpen = false;
+const pendingRevertLogEntryIds = new Set<string>();
 
 // --- Listener pattern (matches canvas-state.ts) ---
 
@@ -22,35 +25,6 @@ export function onChangelogChange(fn: ChangelogListener): () => void {
 
 function notifyChangelogChange(): void {
   changelogListeners.forEach((fn) => fn());
-}
-
-// --- Coalesce window ---
-
-const COALESCE_WINDOW_MS = 3000;
-
-function findCoalesceTarget(
-  elementIdentity: ElementIdentity,
-  propertyKey: string,
-): ChangeEntry | null {
-  // Walk entries in reverse insertion order
-  const allEntries = Array.from(entries.values());
-  for (let i = allEntries.length - 1; i >= 0; i--) {
-    const entry = allEntries[i];
-    if (
-      entry.type === "property" &&
-      entry.state === "active" &&
-      entry.propertyKey === propertyKey &&
-      entry.elementIdentity &&
-      entry.elementIdentity.filePath === elementIdentity.filePath &&
-      entry.elementIdentity.lineNumber === elementIdentity.lineNumber &&
-      entry.elementIdentity.columnNumber === elementIdentity.columnNumber &&
-      Date.now() - entry.timestamp < COALESCE_WINDOW_MS
-    ) {
-      return entry;
-    }
-    // Continue searching — non-property entries shouldn't block coalescing
-  }
-  return null;
 }
 
 // --- Public API ---
@@ -69,25 +43,6 @@ export function addChangeEntry(
   return id;
 }
 
-export function addOrCoalescePropertyEntry(
-  entry: Omit<ChangeEntry, "id" | "timestamp">,
-  elementIdentity: ElementIdentity,
-  propertyKey: string,
-  undoId: string,
-): string {
-  const target = findCoalesceTarget(elementIdentity, propertyKey);
-  if (target) {
-    target.timestamp = Date.now();
-    target.summary = entry.summary;
-    if (target.revertData.type === "cliUndo") {
-      target.revertData.undoIds.push(undoId);
-    }
-    notifyChangelogChange();
-    return target.id;
-  }
-  return addChangeEntry(entry);
-}
-
 export function updateChangeEntry(
   id: string,
   updates: Partial<ChangeEntry>,
@@ -103,8 +58,12 @@ export function revertEntry(id: string): void {
   if (!entry || entry.state === "reverted") return;
 
   switch (entry.revertData.type) {
+    case "noop":
+      return;
+
     case "cliUndo":
     case "generateUndo":
+      pendingRevertLogEntryIds.add(id);
       send({ type: "revertChanges", undoIds: entry.revertData.undoIds });
       break;
 
@@ -113,6 +72,16 @@ export function revertEntry(id: string): void {
       import("./canvas-state.js").then(({ removeMove }) => {
         removeMove(moveId);
       });
+      addRevertLogEntry(entry);
+      break;
+    }
+
+    case "moveRestore": {
+      const { moveId, previousDelta } = entry.revertData;
+      import("./canvas-state.js").then(({ restoreMoveDelta }) => {
+        restoreMoveDelta(moveId, previousDelta);
+      });
+      addRevertLogEntry(entry);
       break;
     }
 
@@ -130,6 +99,7 @@ export function revertEntry(id: string): void {
         // if (el) el.innerHTML = originalInnerHTML;
         void originalInnerHTML; // suppress unused variable warning
       });
+      addRevertLogEntry(entry);
       break;
     }
   }
@@ -177,7 +147,6 @@ let bodyEl: HTMLElement | null = null;
 let countEl: HTMLElement | null = null;
 let chevronEl: HTMLElement | null = null;
 let cleanupMessageListener: (() => void) | null = null;
-let timeUpdateInterval: number | null = null;
 let styleEl: HTMLElement | null = null;
 
 // ---------------------------------------------------------------------------
@@ -291,9 +260,13 @@ const CHANGELOG_STYLES = `
     min-height: 38px;
     border-bottom: 1px solid ${COLORS.border};
     transition: background ${TRANSITIONS.fast};
+    cursor: default;
   }
   .changelog-entry:last-child {
     border-bottom: none;
+  }
+  .changelog-entry.selectable {
+    cursor: pointer;
   }
   .changelog-entry:hover {
     background: ${COLORS.bgTertiary};
@@ -319,6 +292,10 @@ const CHANGELOG_STYLES = `
   .component-name {
     color: ${COLORS.textPrimary};
     font-weight: 600;
+  }
+  .entry-separator {
+    color: ${COLORS.textTertiary};
+    margin: 0 6px;
   }
   .arrow {
     color: ${COLORS.textTertiary};
@@ -400,6 +377,51 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
+function canSelectEntry(entry: ChangeEntry): boolean {
+  return Boolean(entry.elementIdentity);
+}
+
+function canRevertEntry(entry: ChangeEntry): boolean {
+  return entry.state !== "reverted" && entry.revertData.type !== "noop";
+}
+
+function formatSummary(entry: ChangeEntry): string {
+  const summaryHtml = escapeHtml(entry.summary).replaceAll(
+    " → ",
+    `<span class="arrow"> → </span>`,
+  );
+  return `<span class="component-name">${escapeHtml(entry.componentName)}</span><span class="entry-separator">•</span>${summaryHtml}`;
+}
+
+function addRevertLogEntry(entry: ChangeEntry): void {
+  addChangeEntry({
+    type: entry.type,
+    componentName: entry.componentName,
+    filePath: entry.filePath,
+    summary: `reverted ${entry.summary}`,
+    state: "active",
+    propertyKey: entry.propertyKey,
+    elementIdentity: entry.elementIdentity,
+    revertData: { type: "noop" },
+  });
+}
+
+async function focusEntryTarget(id: string): Promise<void> {
+  const entry = entries.get(id);
+  const identity = entry?.elementIdentity;
+  if (!entry || !identity) return;
+
+  let el = reacquireMovedElement(identity);
+  if (!el) {
+    el = await reacquireMovedElementAsync(identity);
+  }
+  if (!el) {
+    showToast(`Couldn't find ${entry.componentName}`);
+    return;
+  }
+  await selectElement(el, { skipSidebar: false });
+}
+
 function renderEntries(): void {
   if (!bodyEl) return;
   const allEntries = Array.from(entries.values()).reverse();
@@ -411,31 +433,12 @@ function renderEntries(): void {
     .map((entry) => {
       const classes = [
         "changelog-entry",
+        canSelectEntry(entry) ? "selectable" : "",
         entry.state === "reverted" ? "reverted" : "",
         entry.state === "pending" ? "pending" : "",
       ]
         .filter(Boolean)
         .join(" ");
-
-      // Build summary: split on " → " if present
-      const summaryText = escapeHtml(entry.summary);
-      const arrowIdx = entry.summary.indexOf(" → ");
-      let summaryHtml: string;
-      if (arrowIdx !== -1) {
-        const before = escapeHtml(entry.summary.slice(0, arrowIdx));
-        const after = escapeHtml(entry.summary.slice(arrowIdx + 3));
-        // component name is the first token before a space in 'before'
-        const spaceIdx = before.indexOf(" ");
-        if (spaceIdx !== -1) {
-          const comp = before.slice(0, spaceIdx);
-          const rest = before.slice(spaceIdx);
-          summaryHtml = `<span class="component-name">${comp}</span>${escapeHtml(rest)}<span class="arrow"> → </span>${after}`;
-        } else {
-          summaryHtml = `<span class="component-name">${before}</span><span class="arrow"> → </span>${after}`;
-        }
-      } else {
-        summaryHtml = summaryText;
-      }
 
       const fileName = entry.filePath
         ? getBasename(entry.filePath)
@@ -443,10 +446,10 @@ function renderEntries(): void {
       const time = formatRelativeTime(entry.timestamp);
 
       return `<div class="${classes}" data-entry-id="${escapeHtml(entry.id)}">
-  <span class="entry-summary">${summaryHtml}</span>
+  <span class="entry-summary">${formatSummary(entry)}</span>
   ${fileName ? `<span class="entry-file" title="${escapeHtml(fileName)}">${escapeHtml(fileName)}</span>` : ""}
   <span class="entry-time">${time}</span>
-  <button class="entry-revert" title="Revert this change">↩</button>
+  ${canRevertEntry(entry) ? `<button class="entry-revert" title="Revert this change">↩</button>` : ""}
 </div>`;
     })
     .join("");
@@ -462,6 +465,17 @@ function renderEntries(): void {
         revertEntry(id);
       });
     }
+  }
+
+  const entryDivs = Array.from(bodyEl.querySelectorAll(".changelog-entry")) as HTMLElement[];
+  for (const entryDiv of entryDivs) {
+    const id = entryDiv.dataset["entryId"];
+    if (!id) continue;
+    const entry = entries.get(id);
+    if (!entry || !canSelectEntry(entry)) continue;
+    entryDiv.addEventListener("click", () => {
+      void focusEntryTarget(id);
+    });
   }
 }
 
@@ -563,20 +577,30 @@ export function initChangelog(shadowRoot: ShadowRoot): void {
     }
 
     panelEl.classList.toggle("collapsed", !panelOpen);
-
-    if (panelOpen && timeUpdateInterval === null) {
-      timeUpdateInterval = window.setInterval(() => {
-        renderEntries();
-      }, 10000);
-    } else if (!panelOpen && timeUpdateInterval !== null) {
-      clearInterval(timeUpdateInterval);
-      timeUpdateInterval = null;
-    }
   });
 
   // Listen for revertComplete messages
   cleanupMessageListener = onMessage((msg) => {
     if (msg.type === "revertComplete") {
+      for (const [id, entry] of entries) {
+        if (!pendingRevertLogEntryIds.has(id)) continue;
+        const revertData = entry.revertData;
+        if (revertData.type !== "cliUndo" && revertData.type !== "generateUndo") continue;
+
+        const matchedResults = msg.results.filter((result) =>
+          revertData.undoIds.includes(result.undoId),
+        );
+        if (matchedResults.length === 0) continue;
+
+        pendingRevertLogEntryIds.delete(id);
+        if (matchedResults.every((result) => result.success)) {
+          addRevertLogEntry(entry);
+        } else {
+          entry.state = "active";
+          notifyChangelogChange();
+        }
+      }
+
       for (const result of msg.results) {
         if (!result.success && result.error) {
           showToast(`Revert failed: ${result.error}`);
@@ -599,10 +623,6 @@ export function initChangelog(shadowRoot: ShadowRoot): void {
 let destroyChangelogCleanup: () => void = () => {};
 
 export function destroyChangelog(): void {
-  if (timeUpdateInterval !== null) {
-    clearInterval(timeUpdateInterval);
-    timeUpdateInterval = null;
-  }
   if (cleanupMessageListener) {
     cleanupMessageListener();
     cleanupMessageListener = null;
@@ -618,6 +638,7 @@ export function destroyChangelog(): void {
   countEl = null;
   chevronEl = null;
 
+  pendingRevertLogEntryIds.clear();
   clearChangelog();
   changelogListeners = [];
 }
