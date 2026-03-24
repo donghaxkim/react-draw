@@ -7,6 +7,7 @@ import { setInteractionPointerEvents, activateInteraction, getPageElementAtPoint
 import { getActiveTool } from "./canvas-state.js";
 import { addTextEditAnnotation } from "./canvas-state.js";
 import { isInternalName } from "./utils/component-filter.js";
+import { selectElement } from "./selection.js";
 
 // --- Blocklist: replaced/void elements where contentEditable is useless ---
 const BLOCKED_TAGS = new Set([
@@ -306,7 +307,12 @@ function commitAndExit(): void {
     }
   }
 
+  const elementToSelect = editingElement;
   exitEditMode();
+  // After exiting edit mode, highlight the element as selected
+  if (elementToSelect && document.contains(elementToSelect)) {
+    selectElement(elementToSelect, { skipSidebar: false });
+  }
 }
 
 function exitEditMode(): void {

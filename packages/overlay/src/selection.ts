@@ -501,7 +501,7 @@ function handleMouseUp(e: MouseEvent): void {
   isShiftClick = false;
 }
 
-async function selectElement(el: HTMLElement, options?: { skipSidebar?: boolean }): Promise<void> {
+export async function selectElement(el: HTMLElement, options?: { skipSidebar?: boolean }): Promise<void> {
   try {
     const displayRect = el.getBoundingClientRect();
 
