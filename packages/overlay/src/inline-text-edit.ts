@@ -1,5 +1,6 @@
 import type { ServerMessage, ComponentInfo, ElementIdentity, TextEditAnnotation } from "@frameup/shared";
 import { getFiberFromHostInstance, isCompositeFiber, getDisplayName } from "bippy";
+import { getOwnerStack, normalizeFileName, isSourceFile } from "bippy/source";
 import { send, onMessage } from "./bridge.js";
 import { COLORS } from "./design-tokens.js";
 import { setInteractionPointerEvents, activateInteraction, getPageElementAtPoint } from "./interaction.js";
@@ -90,13 +91,48 @@ function isMultiLine(el: HTMLElement): boolean {
   return false;
 }
 
-// --- Component resolution (matches selection.ts fiber walk pattern) ---
+// --- Component resolution (matches selection.ts async pattern for React 19) ---
 
-function resolveComponent(el: HTMLElement): ComponentInfo | null {
+async function resolveComponent(el: HTMLElement): Promise<ComponentInfo | null> {
+  const fiber = getFiberFromHostInstance(el);
+  if (!fiber) return null;
+
+  // Strategy 1: async getOwnerStack (React 19 — _debugSource is absent)
   try {
-    const fiber = getFiberFromHostInstance(el);
-    if (!fiber) return null;
+    const frames = await getOwnerStack(fiber);
+    if (frames && frames.length > 0) {
+      for (const frame of frames) {
+        if (!frame.functionName) continue;
+        const name = frame.functionName;
+        if (name[0] !== name[0].toUpperCase()) continue;
+        if (isInternalName(name)) continue;
 
+        let filePath = "";
+        if (frame.fileName) {
+          const normalized = normalizeFileName(frame.fileName);
+          const isSource = isSourceFile(normalized);
+          if (isSource) {
+            filePath = normalized;
+          }
+        }
+
+        return {
+          tagName: el.tagName.toLowerCase(),
+          componentName: name,
+          filePath,
+          lineNumber: frame.lineNumber ?? 0,
+          columnNumber: frame.columnNumber ?? 0,
+          stack: [],
+          boundingRect: el.getBoundingClientRect(),
+        };
+      }
+    }
+  } catch {
+    // getOwnerStack failed — fall through to fiber walk
+  }
+
+  // Strategy 2: synchronous fiber walk fallback (React 18 — uses _debugSource)
+  try {
     let current = fiber;
     while (current) {
       if (isCompositeFiber(current)) {
@@ -119,7 +155,7 @@ function resolveComponent(el: HTMLElement): ComponentInfo | null {
       current = current.return;
     }
   } catch {
-    // Fiber resolution can fail — not all elements are in React tree
+    // Fiber resolution can fail
   }
   return null;
 }
@@ -162,7 +198,14 @@ function enterEditMode(element: HTMLElement): void {
   originalInnerHTML = element.innerHTML;
   lastKnownText = originalTextContent;
 
-  componentInfo = resolveComponent(element);
+  // Resolve async — result stored when ready, used at commit time
+  componentInfo = null;
+  resolveComponent(element).then((info) => {
+    // Only store if we're still editing the same element
+    if (editingElement === element) {
+      componentInfo = info;
+    }
+  });
 
   savedOutline = element.style.outline;
   element.style.outline = `2px solid ${COLORS.accent}`;
@@ -218,22 +261,45 @@ function commitAndExit(): void {
   const changed = newText !== originalTextContent;
 
   if (changed && componentInfo) {
-    pendingCommit = {
-      componentInfo,
-      originalText: originalTextContent,
-      newText,
-      originalInnerHTML,
-      tagName: componentInfo.tagName,
-    };
+    if (componentInfo.filePath) {
+      // Path A: AST write — we have source location info
+      pendingCommit = {
+        componentInfo,
+        originalText: originalTextContent,
+        newText,
+        originalInnerHTML,
+        tagName: componentInfo.tagName,
+      };
 
-    send({
-      type: "updateText",
-      filePath: componentInfo.filePath,
-      lineNumber: componentInfo.lineNumber,
-      columnNumber: componentInfo.columnNumber,
-      originalText: originalTextContent,
-      newText,
-    });
+      send({
+        type: "updateText",
+        filePath: componentInfo.filePath,
+        lineNumber: componentInfo.lineNumber,
+        columnNumber: componentInfo.columnNumber,
+        originalText: originalTextContent,
+        newText,
+      });
+    } else {
+      // Path B: No source location — go directly to annotation fallback
+      const ann: TextEditAnnotation = {
+        type: "textEdit",
+        id: `text-edit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        componentName: componentInfo.componentName,
+        filePath: "",
+        lineNumber: 0,
+        columnNumber: 0,
+        originalText: originalTextContent,
+        newText,
+      };
+      const identity: ElementIdentity = {
+        componentName: componentInfo.componentName,
+        filePath: "",
+        lineNumber: 0,
+        columnNumber: 0,
+        tagName: componentInfo.tagName,
+      };
+      addTextEditAnnotation(ann, identity, originalInnerHTML);
+    }
   }
 
   exitEditMode();
