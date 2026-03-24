@@ -434,7 +434,8 @@ export function inspect(element: HTMLElement, info: ComponentInfo): void {
   // Clean up previous controls
   destroyControls();
 
-  // Set up new state
+  // Set up new state — reset showAllGroups so new selections start with contextual filtering
+  state.showAllGroups = false;
   state.selectedElement = element;
   state.componentInfo = info;
   state.elementIdentity = {
