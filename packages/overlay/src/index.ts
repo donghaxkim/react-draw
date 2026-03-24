@@ -28,6 +28,7 @@ import { grabHandler } from "./tools/grab.js";
 import { moveHandler } from "./tools/move.js";
 import { drawHandler } from "./tools/draw.js";
 import { textHandler, cleanupTextTool } from "./tools/text.js";
+import { initInlineTextEdit, destroyInlineTextEdit } from "./inline-text-edit.js";
 import { initCanvasTransform, destroyCanvasTransform, resetCanvasTransform } from "./canvas-transform.js";
 import { COLORS, SHADOWS, RADII, TRANSITIONS, FONT_FAMILY } from "./design-tokens.js";
 
@@ -212,6 +213,7 @@ function init(): void {
 
   moveObserver.observe(document.body, { childList: true, subtree: true });
   initToolsPanel();
+  initInlineTextEdit();
   initInteraction();
   showOnboardingHint();
 
@@ -341,6 +343,7 @@ function close(): void {
   destroyAnnotationLayer();
   moveObserver?.disconnect();
   destroyToolsPanel();
+  destroyInlineTextEdit();
   destroyInteraction();
   resetCanvas();
   destroyCanvasTransform();
