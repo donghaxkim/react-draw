@@ -1,6 +1,7 @@
 // packages/overlay/src/toolbar.ts
 import { send, onMessage, setOnMaxRetries, setOnTabTakenOver, setOnReconnected, manualReconnect } from "./bridge.js";
 import { COLORS, SHADOWS, RADII, TRANSITIONS, FONT_FAMILY, FONT_FACE_CSS } from "./design-tokens.js";
+import { setOnCountChange, confirmAll, discardAll, isApplying } from "./pending-changes.js";
 
 let shadowRoot: ShadowRoot | null = null;
 let undoBtn: HTMLButtonElement | null = null;
@@ -168,6 +169,33 @@ const TOOLBAR_STYLES = `
     border-radius: 50%;
     animation: spin 0.6s linear infinite;
   }
+  .pending-actions {
+    display: none;
+    align-items: center;
+    gap: 4px;
+  }
+  .confirm-btn {
+    padding: 4px 12px;
+    background: #2563eb;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .confirm-btn:hover { background: #1d4ed8; }
+  .confirm-btn:disabled { opacity: 0.5; cursor: wait; }
+  .discard-btn {
+    padding: 4px 8px;
+    background: transparent;
+    color: #9ca3af;
+    border: 1px solid #374151;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .discard-btn:hover { color: #ef4444; border-color: #ef4444; }
 `;
 
 export function mountToolbar(onClose: () => void): void {
@@ -191,6 +219,10 @@ export function mountToolbar(onClose: () => void): void {
     </button>
     <span class="divider"></span>
     <button class="generate-btn" disabled>Confirm</button>
+    <div class="pending-actions" style="display:none">
+      <button class="confirm-btn" title="Confirm Changes">Confirm Changes</button>
+      <button class="discard-btn" title="Discard all pending changes">✕</button>
+    </div>
     <button class="icon-btn close-btn" title="Close FrameUp">
       ${CLOSE_SVG}
     </button>
@@ -223,6 +255,29 @@ export function mountToolbar(onClose: () => void): void {
   generateBtn!.addEventListener("click", () => {
     if (onGenerate) onGenerate();
   });
+
+  const pendingActions = toolbar.querySelector(".pending-actions") as HTMLDivElement;
+  const confirmBtn = toolbar.querySelector(".confirm-btn") as HTMLButtonElement;
+  const discardBtn = toolbar.querySelector(".discard-btn") as HTMLButtonElement;
+
+  setOnCountChange((count) => {
+    if (count > 0 && !isApplying()) {
+      pendingActions.style.display = "flex";
+      confirmBtn.textContent = `Confirm Changes (${count})`;
+      confirmBtn.disabled = false;
+    } else if (isApplying()) {
+      pendingActions.style.display = "flex";
+      confirmBtn.textContent = "Applying...";
+      confirmBtn.disabled = true;
+      discardBtn.style.display = "none";
+    } else {
+      pendingActions.style.display = "none";
+      discardBtn.style.display = "inline-block";
+    }
+  });
+
+  confirmBtn.addEventListener("click", () => { confirmAll(); });
+  discardBtn.addEventListener("click", () => { discardAll(); });
 
   // Keyboard shortcut: Ctrl/Cmd+Z for canvas undo
   document.addEventListener("keydown", (e) => {
