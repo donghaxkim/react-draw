@@ -36,6 +36,7 @@
 | `packages/overlay/src/drag.ts` | Path B: replace `reorder` send with `addToPending()` |
 | `packages/overlay/src/tools/move.ts` | Path B: replace `move` send with `addToPending()` |
 | `packages/overlay/src/utils/nth-of-type.ts` | **New** — shared `computeNthOfType(el)` utility |
+| `packages/overlay/src/utils/class-matches-prefix.ts` | **New** — `classMatchesPrefix()` duplicated from transform.ts (pure string logic) |
 | `packages/overlay/src/toolbar.ts` | Add "Confirm Changes" + "Discard" buttons |
 | `packages/overlay/src/changelog.ts` | Add pending/active state tracking for batched changes |
 | `packages/cli/src/generate.ts` | Refactor to import from claude-shared.ts |
@@ -682,7 +683,7 @@ Extract these functions from `generate.ts`:
 - `parseDiffResponse()` (~line 355–431)
 - `resolveReplacementOffset()` (~line 536–578)
 - `applyReplacements()` (~line 588–605)
-- `readSourceFiles()` (~line 60–81) — **currently non-exported**, must be newly exported
+- `readSourceFiles()` (~line 60–81) — **currently non-exported**, must be newly exported. Already takes `(filePaths, projectRoot)` as params (no closure over module state), so extraction is a clean move.
 - `validateDiffChange()` (~line 466–512)
 - Related types: `ParsedChange`, `Replacement`, `UndoFileEntry` — **Note:** `UndoFileEntry` is a local type in `generate.ts` (distinct from `UndoEntry` in shared types). It has `filePath`, `content` (before), and `afterContent` fields. Extract it alongside the functions.
 
@@ -1318,6 +1319,10 @@ In the `ws.on("message")` handler, alongside the `"generate"` case (~line 342), 
           })
           .finally(() => {
             generateLocked = false;
+            // processQueue() here unsticks any messages that arrived while the
+            // generateLock was held. applyAllChanges isn't part of the queue
+            // system itself, but it shares the generateLocked guard with the
+            // generate handler, so releasing the lock should drain the queue.
             processQueue();
           });
         break;
@@ -1338,12 +1343,13 @@ git commit -m "feat(server): add applyAllChanges handler with generateLocked gua
 
 ---
 
-## Task 10: Shared `computeNthOfType()` utility
+## Task 10: Shared overlay utilities (`computeNthOfType`, `classMatchesPrefix`)
 
 **Files:**
 - Create: `packages/overlay/src/utils/nth-of-type.ts`
+- Create: `packages/overlay/src/utils/class-matches-prefix.ts`
 
-- [ ] **Step 1: Create the utility**
+- [ ] **Step 1: Create `computeNthOfType` utility**
 
 ```typescript
 // packages/overlay/src/utils/nth-of-type.ts
@@ -1361,12 +1367,37 @@ export function computeNthOfType(el: HTMLElement): number {
 }
 ```
 
-- [ ] **Step 2: Build overlay**
+- [ ] **Step 2: Create `classMatchesPrefix` utility**
+
+Duplicated from `packages/cli/src/transform.ts:268-277` (pure string logic, no AST deps).
+Used by `addPendingFromCurrentState()` to find the old Tailwind class to replace.
+
+```typescript
+// packages/overlay/src/utils/class-matches-prefix.ts
+
+/**
+ * Check if a Tailwind class matches a given prefix.
+ * Handles standalone classes (flex, hidden, relative), prefixed classes
+ * (bg-red-500), and skips variant-prefixed classes (hover:bg-blue-700).
+ *
+ * Duplicated from transform.ts — kept in sync manually.
+ */
+export function classMatchesPrefix(cls: string, prefix: string): boolean {
+  // Skip variant-prefixed classes (e.g. hover:bg-blue-700, dark:bg-gray-900)
+  if (cls.includes(":")) return false;
+  // Exact match for standalone classes like "rounded"
+  if (cls === prefix) return true;
+  // prefix- followed by something
+  return cls.startsWith(`${prefix}-`);
+}
+```
+
+- [ ] **Step 3: Build overlay**
 
 Run: `pnpm build:overlay`
 Expected: Build succeeds
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add packages/overlay/src/utils/nth-of-type.ts
@@ -1407,9 +1438,18 @@ import { showToast } from "./toolbar.js";
 type PendingElementKey = string;
 
 /**
- * Identity-based key using component name, file path, line/column, and tag.
- * Stable within one HMR cycle. We clear pending changes after each apply,
- * so line drift across HMR boundaries is fine.
+ * Identity-based key using component name, file path, lineHint, and tag.
+ *
+ * lineHint is the approximate line number from fiber resolution — it can
+ * drift after HMR rewrites the file. This is acceptable because:
+ * 1. The key only needs to be stable within one HMR cycle.
+ * 2. We clear all pending changes on each successful apply (which triggers HMR).
+ * 3. Between applies, no file writes happen, so line numbers don't change.
+ *
+ * If two elements in the same component/file/tag happen to share the same
+ * lineHint, their changes will merge (last write wins). This is unlikely
+ * in practice — same component, same file, same tag, same line — and
+ * harmless when it occurs (the user's latest change wins).
  */
 function makeElementKey(change: ApplyChange): PendingElementKey {
   return `${change.componentName}:${change.filePath}:${change.lineHint}:${change.tag}`;
@@ -1468,19 +1508,35 @@ export function clearAll(): void {
   onCountChange?.(0);
 }
 
+// Track element refs + inline style overrides for revert on discard.
+// Mirrors the property-controller's state.activeOverrides pattern.
+const pendingOverrides = new Map<PendingElementKey, {
+  element: HTMLElement;
+  overrides: Map<string, string>; // cssProperty → original inline value (empty = was unset)
+}>();
+
+/** Store the preview overrides for later revert on discard. */
+export function trackOverrides(
+  change: ApplyChange,
+  element: HTMLElement,
+  overrides: Map<string, string>,
+): void {
+  const key = makeElementKey(change);
+  pendingOverrides.set(key, { element, overrides: new Map(overrides) });
+}
+
 /**
- * Discard all pending changes and remove inline CSS previews.
- * Called when user clicks "Discard" or presses Escape.
- *
- * v1 limitation: inline CSS previews applied by property-controller
- * are not automatically reverted on discard. The user must refresh
- * the page to clear stale previews. This is acceptable for v1 because:
- * - HMR will reset styles on next code change
- * - The visual inconsistency is temporary and non-destructive
- * - Proper cleanup requires tracking applied inline overrides per element,
- *   which is a non-trivial addition better suited for a follow-up.
+ * Discard all pending changes and revert inline CSS previews.
+ * Called when user clicks the ✕ discard button.
  */
 export function discardAll(): void {
+  // Revert inline style overrides on all affected elements
+  for (const [, { element, overrides }] of pendingOverrides) {
+    for (const [cssProperty, originalValue] of overrides) {
+      (element.style as any)[cssProperty] = originalValue;
+    }
+  }
+  pendingOverrides.clear();
   clearAll();
   showToast("Discarded all pending changes", "info");
 }
@@ -1655,6 +1711,11 @@ git commit -m "feat(overlay): add pending changes store with merge, confirmAll, 
 In `server.ts`, in the `ws.on("connection")` handler, send immediately after connection:
 
 ```typescript
+// NOTE: Config is sent once on connect and never updated. If the user adds
+// an API key to .env after FrameUp starts, the overlay won't know until
+// FrameUp is restarted. This is acceptable — .env changes require a process
+// restart by convention. If we ever support hot-reloading .env, we'd need
+// to re-send this config message on file change.
 ws.send(JSON.stringify({
   type: "config",
   hasApiKey: !!process.env.ANTHROPIC_API_KEY,
@@ -1764,18 +1825,17 @@ discardBtn.addEventListener("click", () => {
   discardAll();
 });
 
-// Escape key discards all pending changes
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && pendingCount() > 0 && !isApplying()) {
-    discardAll();
-  }
-});
+// NOTE: Do NOT bind Escape to discard. Escape is already used by selection.ts
+// to deselect elements and cancel property overrides (lines 793-815).
+// Binding Escape here would conflict — pressing Escape with a selected element
+// would both deselect AND discard all pending changes across all elements.
+// The ✕ button is the explicit discard mechanism.
 ```
 
 Add imports at top of toolbar.ts:
 
 ```typescript
-import { setOnCountChange, confirmAll, discardAll, isApplying, pendingCount } from "./pending-changes.js";
+import { setOnCountChange, confirmAll, discardAll, isApplying } from "./pending-changes.js";
 ```
 
 - [ ] **Step 5: Build and manual test**
@@ -1787,7 +1847,7 @@ Expected: Build succeeds. Button should appear when changes are pending.
 
 ```bash
 git add packages/overlay/src/toolbar.ts
-git commit -m "feat(toolbar): add Confirm Changes button with count badge"
+git commit -m "feat(toolbar): add Confirm Changes + Discard buttons"
 ```
 
 ---
@@ -1823,9 +1883,10 @@ function scheduledCommit(): void {
 - [ ] **Step 3: Add `addPendingFromCurrentState()` helper**
 
 ```typescript
-import { addToPending } from "../pending-changes.js";
+import { addToPending, trackOverrides } from "../pending-changes.js";
 import { computeNthOfType } from "../utils/nth-of-type.js";
 import { hasApiKey } from "../config.js";
+import { classMatchesPrefix } from "../utils/class-matches-prefix.js";
 
 function addPendingFromCurrentState(): void {
   if (!state.selectedElement || !state.componentInfo || state.pendingBatch.size === 0) return;
@@ -1836,14 +1897,14 @@ function addPendingFromCurrentState(): void {
 
   // PendingUpdate has: property, cssProperty, value, tailwindPrefix, tailwindToken, originalValue
   // We need to compute oldClass/newClass from the className string + prefix.
-  const currentClassName = el.className || "";
+  // Use classMatchesPrefix() — the same matching logic transform.ts uses in
+  // updateClassName(). This handles standalone classes (flex, hidden, relative),
+  // prefixed classes (bg-red-500), and avoids false matches (bg- matching bg-gradient-to-r).
+  const originalClassName = el.getAttribute("class") || "";
+  const classes = originalClassName.split(/\s+/).filter(Boolean);
   const updates: Array<{ cssProperty: string; tailwindPrefix: string; tailwindToken: string | null; value: string; oldClass: string; newClass: string }> = [];
   for (const [cssProperty, entry] of state.pendingBatch) {
-    // Find the old class: the class in the original className that starts with this prefix
-    const classes = currentClassName.split(/\s+/);
-    const oldClass = state.originalValues.has(entry.property)
-      ? classes.find((c) => c.startsWith(entry.tailwindPrefix + "-") || c === entry.tailwindPrefix) || ""
-      : "";
+    const oldClass = classes.find((c) => classMatchesPrefix(c, entry.tailwindPrefix)) || "";
     const newClass = entry.tailwindToken || "";
     updates.push({
       cssProperty,
@@ -1855,8 +1916,8 @@ function addPendingFromCurrentState(): void {
     });
   }
 
-  addToPending({
-    type: "property",
+  const change = {
+    type: "property" as const,
     componentName: info.componentName,
     tag: info.tagName,
     filePath: info.filePath,
@@ -1867,7 +1928,13 @@ function addPendingFromCurrentState(): void {
     parentClassName: parentEl?.className || "",
     lineHint: info.lineNumber,
     updates,
-  });
+  };
+
+  addToPending(change);
+
+  // Store element ref + overrides so discardAll() can revert inline styles.
+  // state.activeOverrides tracks the CSS properties that were set via inline style.
+  trackOverrides(change, el, state.activeOverrides);
 }
 ```
 
@@ -1890,6 +1957,14 @@ function commitAndDeselect(): void {
 - [ ] **Step 5: Add read-only "Preview only" mode when filePath is empty**
 
 In `inspect()` (~line 533), after checking `info.filePath`:
+
+At the top of `inspect()`, alongside the other state resets (~line 544-565), add:
+
+```typescript
+state.readOnly = false; // Reset — previous selection may have been read-only
+```
+
+Then after the state setup, check filePath:
 
 ```typescript
 if (!info.filePath) {
@@ -2181,10 +2256,10 @@ Expected: All CLI tests (108+) and overlay tests (48+) pass
 - [ ] **Step 4.5: Manual test — Discard flow**
 
 1. Make changes to 2-3 elements (Path B, API key set)
-2. Verify "Confirm Changes (N)" shows in toolbar
-3. Press Escape → verify all pending changes cleared, inline previews removed, toast shows "Discarded"
-4. Alternatively: click the ✕ discard button → same behavior
-5. Verify changelog panel cleared pending entries
+2. Verify "Confirm Changes (N)" shows in toolbar with ✕ discard button
+3. Click the ✕ discard button → verify all pending changes cleared, inline CSS previews reverted, toast shows "Discarded all pending changes"
+4. Verify changelog panel cleared pending entries
+5. Verify the elements visually revert to their original styling (no stale inline overrides)
 
 - [ ] **Step 5: Manual test — file discovery (Layer 2)**
 
