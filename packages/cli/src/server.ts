@@ -15,6 +15,7 @@ import { updateClassName, updateTextContent } from "./transform.js";
 import { resolveTailwindConfig } from "./tailwind-resolver.js";
 import { generate } from "./generate.js";
 import { isProjectFilePathSafe, resolveProjectFilePath } from "./path-resolver.js";
+import { discoverFile } from "./file-discovery.js";
 
 interface SketchServerOptions {
   port: number;
@@ -338,6 +339,14 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             send(ws, { type: "siblingsList", siblings: [] });
           }
           break;
+
+        case "discoverFile": {
+          // Async — won't block the event loop during grep
+          discoverFile(msg.componentName, projectRoot).then((filePath) => {
+            send(ws, { type: "discoverFileResult", componentName: msg.componentName, filePath });
+          });
+          break;
+        }
 
         case "generate": {
           const resolvedKey = apiKey || process.env.ANTHROPIC_API_KEY;
