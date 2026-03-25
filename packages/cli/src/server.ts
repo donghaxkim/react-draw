@@ -16,6 +16,7 @@ import { resolveTailwindConfig } from "./tailwind-resolver.js";
 import { generate } from "./generate.js";
 import { isProjectFilePathSafe, resolveProjectFilePath } from "./path-resolver.js";
 import { discoverFile } from "./file-discovery.js";
+import { applyAllChanges } from "./claude-apply.js";
 
 interface SketchServerOptions {
   port: number;
@@ -355,6 +356,78 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
           discoverFile(msg.componentName, projectRoot).then((filePath) => {
             send(ws, { type: "discoverFileResult", componentName: msg.componentName, filePath });
           });
+          break;
+        }
+
+        case "applyAllChanges": {
+          if (generateLocked) {
+            send(ws, {
+              type: "applyAllComplete",
+              success: false,
+              appliedCount: 0,
+              failedCount: msg.changes.length,
+              undoIds: [],
+              error: "Another operation is in progress",
+            } as any);
+            break;
+          }
+          generateLocked = true;
+
+          const resolvedKey = apiKey || process.env.ANTHROPIC_API_KEY;
+          if (!resolvedKey) {
+            generateLocked = false;
+            send(ws, {
+              type: "applyAllComplete",
+              success: false,
+              appliedCount: 0,
+              failedCount: msg.changes.length,
+              undoIds: [],
+              error: "ANTHROPIC_API_KEY not set",
+            } as any);
+            break;
+          }
+
+          applyAllChanges({
+            changes: msg.changes,
+            apiKey: resolvedKey,
+            projectRoot,
+          })
+            .then((result) => {
+              const undoIds: string[] = [];
+              for (const entry of result.undoEntries) {
+                const undoId = `apply-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                undoStack.push({
+                  id: undoId,
+                  filePath: entry.filePath,
+                  content: entry.content,
+                  afterContent: entry.afterContent,
+                  timestamp: Date.now(),
+                });
+                undoIds.push(undoId);
+              }
+              send(ws, {
+                type: "applyAllComplete",
+                success: result.success,
+                appliedCount: result.appliedCount,
+                failedCount: result.failedCount,
+                undoIds,
+                error: result.error,
+              } as any);
+            })
+            .catch((err) => {
+              send(ws, {
+                type: "applyAllComplete",
+                success: false,
+                appliedCount: 0,
+                failedCount: msg.changes.length,
+                undoIds: [],
+                error: err instanceof Error ? err.message : "Unknown error",
+              } as any);
+            })
+            .finally(() => {
+              generateLocked = false;
+              processQueue();
+            });
           break;
         }
 
