@@ -5,6 +5,71 @@ export interface FileChange {
   description: string;
 }
 
+export type ApplyChange =
+  | {
+      type: "property";
+      componentName: string;
+      tag: string;
+      filePath: string;
+      textContent: string;
+      className: string;
+      nthOfType: number;
+      parentTag: string;
+      parentClassName: string;
+      lineHint: number;
+      updates: Array<{
+        cssProperty: string;
+        tailwindPrefix: string;
+        tailwindToken: string | null;
+        value: string;
+        oldClass: string;
+        newClass: string;
+        relatedOldClasses: string[];
+      }>;
+    }
+  | {
+      type: "text";
+      componentName: string;
+      tag: string;
+      filePath: string;
+      className: string;
+      nthOfType: number;
+      parentTag: string;
+      parentClassName: string;
+      lineHint: number;
+      originalText: string;
+      newText: string;
+    }
+  | {
+      type: "reorder";
+      componentName: string;
+      tag: string;
+      filePath: string;
+      parentClassName: string;
+      lineHint: number;
+      childrenContext: Array<{
+        tag: string;
+        className: string;
+        textContent: string;
+      }>;
+      fromIndex: number;
+      toIndex: number;
+    }
+  | {
+      type: "move";
+      componentName: string;
+      tag: string;
+      filePath: string;
+      className: string;
+      nthOfType: number;
+      parentTag: string;
+      parentClassName: string;
+      lineHint: number;
+      delta: { dx: number; dy: number };
+      resolvedDx: string | null;
+      resolvedDy: string | null;
+    };
+
 export type ClientMessage =
   | {
       type: "reorder";
@@ -61,7 +126,8 @@ export type ClientMessage =
       newText: string;
     }
   | { type: "revertChanges"; undoIds: string[] }
-  | { type: "discoverFile"; componentName: string };
+  | { type: "discoverFile"; componentName: string }
+  | { type: "applyAllChanges"; changes: ApplyChange[] };
 
 export type ServerMessage =
   | { type: "reorderComplete"; success: boolean; error?: string }
@@ -85,7 +151,16 @@ export type ServerMessage =
   | { type: "generateComplete"; success: boolean; changes: FileChange[]; error?: string; undoIds?: string[] }
   | { type: "updateTextComplete"; success: boolean; error?: string; reason?: string; undoId?: string }
   | { type: "revertComplete"; results: Array<{ undoId: string; success: boolean; error?: string }> }
-  | { type: "discoverFileResult"; componentName: string; filePath: string | null };
+  | { type: "discoverFileResult"; componentName: string; filePath: string | null }
+  | {
+      type: "applyAllComplete";
+      success: boolean;
+      appliedCount: number;
+      failedCount: number;
+      error?: string;
+      undoIds: string[];
+    }
+  | { type: "config"; hasApiKey: boolean };
 
 export interface ComponentInfo {
   tagName: string;
@@ -267,7 +342,8 @@ export type RevertData =
   | { type: "moveRemove"; moveId: string }
   | { type: "moveRestore"; moveId: string; previousDelta: { dx: number; dy: number } }
   | { type: "annotationRemove"; annotationId: string; originalInnerHTML: string; elementIdentity: ElementIdentity }
-  | { type: "generateUndo"; undoIds: string[] };
+  | { type: "generateUndo"; undoIds: string[] }
+  | { type: "batchApplyUndo"; undoIds: string[] };
 
 export interface ChangeEntry {
   id: string;
