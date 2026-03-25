@@ -8,6 +8,11 @@ vi.mock("../bridge.js", () => ({
 vi.mock("../toolbar.js", () => ({
   showToast: vi.fn(),
 }));
+vi.mock("../changelog.js", () => ({
+  addChangeEntry: vi.fn(),
+  promoteAllPending: vi.fn(),
+  removeAllPending: vi.fn(),
+}));
 
 import { addToPending, pendingCount, clearAll, getAllPending, discardAll } from "../pending-changes.js";
 import type { ApplyChange } from "@frameup/shared";
