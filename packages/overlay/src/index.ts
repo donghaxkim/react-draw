@@ -155,6 +155,9 @@ function restoreMoveToElement(id: string, entry: MoveEntry, newEl: HTMLElement):
 }
 
 function init(): void {
+  // Only run in the top-level frame — skip iframes to avoid duplicate WS connections
+  if (window !== window.top) return;
+
   const wsPort = window.__FRAMEUP_WS_PORT__;
   if (!wsPort) {
     console.warn("[FrameUp] No WebSocket port found.");

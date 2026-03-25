@@ -138,7 +138,8 @@ export function confirmAll(): void {
   applying = true;
   onCountChange?.(pending.size);
 
-  send({ type: "applyAllChanges", changes: getAllPending() });
+  const changes = getAllPending();
+  send({ type: "applyAllChanges", changes });
 
   applyTimeoutId = setTimeout(() => {
     if (applying) {

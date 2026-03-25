@@ -6,10 +6,10 @@ import { setOnCountChange, confirmAll, discardAll, isApplying } from "./pending-
 let shadowRoot: ShadowRoot | null = null;
 let undoBtn: HTMLButtonElement | null = null;
 let undoCount = 0;
-let generateBtn: HTMLButtonElement | null = null;
 let toastEl: HTMLDivElement | null = null;
 let toastTimeout: ReturnType<typeof setTimeout> | null = null;
 let componentDetailEl: HTMLDivElement | null = null;
+let generateBtn: HTMLButtonElement | null = null;
 let onGenerate: (() => void) | null = null;
 let onCanvasUndo: (() => boolean) | null = null;
 
@@ -175,17 +175,20 @@ const TOOLBAR_STYLES = `
     gap: 4px;
   }
   .confirm-btn {
-    padding: 4px 12px;
-    background: #2563eb;
-    color: white;
+    background: ${COLORS.accent};
     border: none;
-    border-radius: 6px;
+    border-radius: ${RADII.sm};
+    color: white;
+    padding: 6px 14px;
     font-size: 12px;
+    font-weight: 600;
+    font-family: ${FONT_FAMILY};
     cursor: pointer;
+    transition: background ${TRANSITIONS.fast};
     white-space: nowrap;
   }
-  .confirm-btn:hover { background: #1d4ed8; }
-  .confirm-btn:disabled { opacity: 0.5; cursor: wait; }
+  .confirm-btn:hover { background: ${COLORS.accentHover}; }
+  .confirm-btn:disabled { background: ${COLORS.bgTertiary}; color: ${COLORS.textTertiary}; cursor: wait; }
   .discard-btn {
     padding: 4px 8px;
     background: transparent;
@@ -232,8 +235,9 @@ export function mountToolbar(onClose: () => void): void {
   shadowRoot.appendChild(toolbar);
 
   undoBtn = toolbar.querySelector(".undo-btn");
-  const closeBtn = toolbar.querySelector(".close-btn");
   generateBtn = toolbar.querySelector(".generate-btn");
+  const closeBtn = toolbar.querySelector(".close-btn");
+
   componentDetailEl = toolbar.querySelector(".component-detail");
 
   // Toast element
@@ -251,7 +255,7 @@ export function mountToolbar(onClose: () => void): void {
 
   closeBtn!.addEventListener("click", onClose);
 
-  // Generate button
+  // Generate button (Path A only)
   generateBtn!.addEventListener("click", () => {
     if (onGenerate) onGenerate();
   });
@@ -369,6 +373,12 @@ export function setOnCanvasUndo(fn: () => boolean): void { onCanvasUndo = fn; }
 export function updateGenerateButton(enabled: boolean): void {
   if (generateBtn) generateBtn.disabled = !enabled;
 }
+
+/** Hide the Path A generate button (called when Path B is active). */
+export function hideGenerateButton(): void {
+  if (generateBtn) generateBtn.style.display = "none";
+}
+
 
 
 /**

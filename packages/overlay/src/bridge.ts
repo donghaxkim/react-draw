@@ -59,6 +59,9 @@ export function connect(port: number): void {
       // Handle config from CLI (sent on connect)
       if (msg.type === "config") {
         setHasApiKey(msg.hasApiKey);
+        if (msg.hasApiKey) {
+          import("./toolbar.js").then((t) => t.hideGenerateButton());
+        }
       }
       // Handle apply-all completion
       if (msg.type === "applyAllComplete" && applyAllCompleteListener) {

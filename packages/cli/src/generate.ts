@@ -18,6 +18,7 @@ import {
   type Replacement,
   type UndoFileEntry,
 } from "./claude-shared.js";
+import { resolveProjectFilePath } from "./path-resolver.js";
 
 // Re-export shared utilities so existing importers of generate.ts continue to work
 export {
@@ -483,12 +484,11 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     if (parsed.mode === "diff") {
       // Diff-based path: apply search/replace blocks
       for (const change of parsed.changes) {
-        const resolved = path.isAbsolute(change.filePath)
-          ? change.filePath
-          : path.resolve(projectRoot, change.filePath);
+        const resolved = resolveProjectFilePath(change.filePath, projectRoot)
+          ?? path.resolve(projectRoot, change.filePath);
 
         const originalContent = sources.get(change.filePath);
-        const validationError = validateDiffChange(change, originalContent, projectRoot);
+        const validationError = validateDiffChange(change, originalContent, resolved);
         if (validationError) {
           console.warn(`[FrameUp] Skipping ${change.filePath}: ${validationError}`);
           skippedFiles.push(`${change.filePath}: ${validationError}`);
@@ -508,9 +508,8 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     } else {
       // Fallback: full-file replacement
       for (const change of parsed.changes) {
-        const resolved = path.isAbsolute(change.filePath)
-          ? change.filePath
-          : path.resolve(projectRoot, change.filePath);
+        const resolved = resolveProjectFilePath(change.filePath, projectRoot)
+          ?? path.resolve(projectRoot, change.filePath);
 
         const originalContent = sources.get(change.filePath);
         const validationError = validateFullFileChange(change, originalContent, projectRoot);

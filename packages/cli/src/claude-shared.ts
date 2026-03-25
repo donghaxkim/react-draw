@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import jscodeshift from "jscodeshift";
 import { getParser } from "./transform.js";
+import { resolveProjectFilePath } from "./path-resolver.js";
 
 export interface UndoFileEntry {
   filePath: string;
@@ -36,7 +37,7 @@ export function readSourceFiles(
   const undoEntries: UndoFileEntry[] = [];
 
   for (const fp of filePaths) {
-    const resolved = path.isAbsolute(fp) ? fp : path.resolve(projectRoot, fp);
+    const resolved = resolveProjectFilePath(fp, projectRoot) ?? path.resolve(projectRoot, fp);
     try {
       const content = fs.readFileSync(resolved, "utf-8");
       sources.set(fp, content);
@@ -232,13 +233,9 @@ export function countOccurrences(text: string, sub: string): number {
 export function validateDiffChange(
   change: ParsedChange,
   originalContent: string | undefined,
-  projectRoot: string,
+  resolvedPath: string,
 ): string | null {
-  const resolved = path.isAbsolute(change.filePath)
-    ? change.filePath
-    : path.resolve(projectRoot, change.filePath);
-
-  if (!fs.existsSync(resolved)) {
+  if (!fs.existsSync(resolvedPath)) {
     return `File does not exist: ${change.filePath}`;
   }
 
@@ -266,7 +263,7 @@ export function validateDiffChange(
   const ext = path.extname(change.filePath);
   if ([".tsx", ".jsx", ".ts", ".js"].includes(ext)) {
     try {
-      const parserName = getParser(resolved);
+      const parserName = getParser(resolvedPath);
       const j = jscodeshift.withParser(parserName);
       j(result);
     } catch {

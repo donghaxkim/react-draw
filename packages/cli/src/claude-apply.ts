@@ -10,6 +10,7 @@ import {
   readSourceFiles,
   type UndoFileEntry,
 } from "./claude-shared.js";
+import { resolveProjectFilePath } from "./path-resolver.js";
 
 const HAIKU_MODEL = "claude-haiku-4-5-20251001";
 const SONNET_MODEL = "claude-sonnet-4-6-20250514";
@@ -197,6 +198,10 @@ export async function applyAllChanges(opts: {
   const filePaths = [...new Set(changes.map((c) => c.filePath))];
   const { sources, undoEntries } = readSourceFiles(filePaths, projectRoot);
 
+  if (sources.size === 0) {
+    return { success: false, appliedCount: 0, failedCount: changes.length, changes: [], undoEntries: [], error: "Could not read any source files" };
+  }
+
   onProgress?.("Sending changes to Claude...");
 
   const userMessage = buildApplyPrompt(changes, sources);
@@ -227,9 +232,7 @@ export async function applyAllChanges(opts: {
 
   for (const diff of parsed) {
     const filePath = diff.filePath;
-    const resolvedPath = path.isAbsolute(filePath)
-      ? filePath
-      : path.resolve(projectRoot, filePath);
+    const resolvedPath = resolveProjectFilePath(filePath, projectRoot) ?? path.resolve(projectRoot, filePath);
     const original = sources.get(filePath);
     if (!original) {
       failedCount++;
