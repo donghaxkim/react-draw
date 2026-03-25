@@ -12,7 +12,12 @@ import type { PropertyControl } from "./controls/types.js";
 import { pushUndoAction, type PropertyChangeRuntime } from "../canvas-state.js";
 import { dismissOnboarding } from "../onboarding.js";
 import { getFiberFromHostInstance, isCompositeFiber, getDisplayName } from "bippy";
-import { getOwnerStack, normalizeFileName, isSourceFile } from "bippy/source";
+import { getOwnerStack } from "bippy/source";
+import { resolveFrameFilePath } from "../utils/source-resolve.js";
+import { addToPending, trackOverrides } from "../pending-changes.js";
+import { computeNthOfType } from "../utils/nth-of-type.js";
+import { hasApiKey } from "../config.js";
+import { classMatchesPrefix } from "../utils/class-matches-prefix.js";
 
 // Display values that enable flex layout controls
 const FLEX_DISPLAYS = new Set(["flex", "inline-flex"]);
@@ -88,6 +93,7 @@ let state = {
   activeOverrides: new Map<string, string>(),
   pendingBatch: new Map<string, PendingUpdate>(),
   showAllGroups: false,
+  readOnly: false,
 };
 
 let controls: PropertyControl[] = [];
@@ -149,14 +155,17 @@ function reacquireElement(): void {
   // Strategy 1: synchronous _debugSource fiber walk (React 18)
   const matched = reacquireViaDebugSource(identity);
   if (matched) {
-    inspect(matched, info);
+    resolveFreshComponentInfo(matched, info).then((freshInfo) => {
+      inspect(matched, freshInfo);
+    });
     return;
   }
 
   // Strategy 2: async getOwnerStack (React 19)
-  reacquireViaOwnerStack(identity).then((asyncMatched) => {
+  reacquireViaOwnerStack(identity).then(async (asyncMatched) => {
     if (asyncMatched) {
-      inspect(asyncMatched, info);
+      const freshInfo = await resolveFreshComponentInfo(asyncMatched, info);
+      inspect(asyncMatched, freshInfo);
     } else {
       deselect();
     }
@@ -212,13 +221,7 @@ async function reacquireViaOwnerStack(identity: ElementIdentity): Promise<HTMLEl
         const name = frame.functionName;
         if (name !== identity.componentName) continue;
 
-        let filePath = "";
-        if (frame.fileName) {
-          const normalized = normalizeFileName(frame.fileName);
-          if (isSourceFile(normalized)) {
-            filePath = normalized;
-          }
-        }
+        const filePath = resolveFrameFilePath(frame.fileName);
 
         if (
           filePath &&
@@ -234,6 +237,68 @@ async function reacquireViaOwnerStack(identity: ElementIdentity): Promise<HTMLEl
   }
 
   return null;
+}
+
+/**
+ * Re-resolve fresh ComponentInfo from a DOM element's fiber.
+ * Used after HMR to get updated line:col from the new fiber tree.
+ */
+async function resolveFreshComponentInfo(
+  element: HTMLElement,
+  fallbackInfo: ComponentInfo
+): Promise<ComponentInfo> {
+  const fiber = getFiberFromHostInstance(element);
+  if (!fiber) return fallbackInfo;
+
+  // Try getOwnerStack (React 19)
+  try {
+    const frames = await getOwnerStack(fiber);
+    if (frames && frames.length > 0) {
+      for (const frame of frames) {
+        if (!frame.functionName) continue;
+        const name = frame.functionName;
+        if (name[0] !== name[0].toUpperCase()) continue;
+        if (name === fallbackInfo.componentName || !fallbackInfo.componentName) {
+          const filePath = resolveFrameFilePath(frame.fileName);
+
+          if (filePath) {
+            const rect = element.getBoundingClientRect();
+            return {
+              ...fallbackInfo,
+              filePath,
+              lineNumber: frame.lineNumber ?? fallbackInfo.lineNumber,
+              columnNumber: frame.columnNumber ?? fallbackInfo.columnNumber,
+              boundingRect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
+            };
+          }
+        }
+      }
+    }
+  } catch {
+    // Fall through
+  }
+
+  // Try _debugSource (React 18)
+  let current = fiber;
+  while (current) {
+    if (isCompositeFiber(current)) {
+      const name = getDisplayName(current.type);
+      const debugSource = current._debugSource || current._debugOwner?._debugSource;
+      if (name === fallbackInfo.componentName && debugSource?.fileName) {
+        const rect = element.getBoundingClientRect();
+        return {
+          ...fallbackInfo,
+          filePath: debugSource.fileName,
+          lineNumber: debugSource.lineNumber ?? fallbackInfo.lineNumber,
+          columnNumber: debugSource.columnNumber ?? fallbackInfo.columnNumber,
+          boundingRect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
+        };
+      }
+    }
+    current = current.return;
+  }
+
+  return fallbackInfo;
 }
 
 // ---------------------------------------------------------------------------
@@ -328,11 +393,85 @@ function rerenderSections(): void {
   sidebar.replaceContent(container);
 }
 
+function addPendingFromCurrentState(): void {
+  if (!state.selectedElement || !state.componentInfo || state.pendingBatch.size === 0) return;
+
+  const el = state.selectedElement;
+  const info = state.componentInfo;
+  const parentEl = el.parentElement;
+
+  const originalClassName = el.getAttribute("class") || "";
+  const classes = originalClassName.split(/\s+/).filter(Boolean);
+  const updates: Array<{
+    cssProperty: string;
+    tailwindPrefix: string;
+    tailwindToken: string | null;
+    value: string;
+    oldClass: string;
+    newClass: string;
+    relatedOldClasses: string[];
+  }> = [];
+
+  for (const [cssProperty, entry] of state.pendingBatch) {
+    const desc = DESCRIPTOR_MAP.get(entry.property);
+
+    // Layer 1: Use classPattern if available (disambiguates shared prefixes like "text")
+    let oldClass = "";
+    if (desc?.classPattern) {
+      const pattern = new RegExp(desc.classPattern);
+      oldClass = classes.find((c) => !c.includes(":") && pattern.test(c)) || "";
+    } else {
+      oldClass = classes.find((c) => classMatchesPrefix(c, entry.tailwindPrefix)) || "";
+    }
+
+    // Layer 2: Find related shorthand classes (e.g. p-4 when changing pt)
+    const relatedOldClasses: string[] = [];
+    for (const rp of entry.relatedPrefixes ?? []) {
+      const found = classes.find((c) => classMatchesPrefix(c, rp));
+      if (found) relatedOldClasses.push(found);
+    }
+
+    const newClass = entry.tailwindToken || "";
+    updates.push({
+      cssProperty,
+      tailwindPrefix: entry.tailwindPrefix,
+      tailwindToken: entry.tailwindToken,
+      value: entry.value,
+      oldClass,
+      newClass,
+      relatedOldClasses,
+    });
+  }
+
+  const change = {
+    type: "property" as const,
+    componentName: info.componentName,
+    tag: info.tagName,
+    filePath: info.filePath,
+    textContent: (el.textContent || "").slice(0, 50),
+    className: el.className,
+    nthOfType: computeNthOfType(el),
+    parentTag: parentEl?.tagName.toLowerCase() || "",
+    parentClassName: parentEl?.className || "",
+    lineHint: info.lineNumber,
+    updates,
+  };
+
+  addToPending(change);
+  trackOverrides(change, el, state.activeOverrides);
+}
+
 /**
  * Debounced version of commit() for rapid-fire changes (e.g. arrow key increments).
  * Batches multiple calls within COMMIT_DEBOUNCE_MS into a single commit.
  */
 export function scheduledCommit(): void {
+  // Path B: API key present → batch, don't write immediately
+  if (hasApiKey()) {
+    addPendingFromCurrentState();
+    return;
+  }
+  // Path A: no API key → existing immediate write behavior
   if (commitTimer) clearTimeout(commitTimer);
   commitTimer = setTimeout(() => {
     commitTimer = null;
@@ -353,6 +492,7 @@ function resetState(): void {
     activeOverrides: new Map(),
     pendingBatch: new Map(),
     showAllGroups: false,
+    readOnly: false,
   };
 }
 
@@ -483,6 +623,7 @@ export function inspect(element: HTMLElement, info: ComponentInfo): void {
 
   // Set up new state — reset showAllGroups so new selections start with contextual filtering
   state.showAllGroups = false;
+  state.readOnly = false; // Reset — previous selection may have been read-only
   state.selectedElement = element;
   state.componentInfo = info;
   state.elementIdentity = {
@@ -503,6 +644,9 @@ export function inspect(element: HTMLElement, info: ComponentInfo): void {
   state.originalValues = new Map(values);
   state.activeOverrides = new Map();
   state.pendingBatch = new Map();
+  if (!info.filePath) {
+    state.readOnly = true;
+  }
 
   // Listen for section expansions to lazily read deferred values
   if (cleanupExpandListener) cleanupExpandListener();
@@ -760,6 +904,17 @@ export function deselect(): void {
  * Used when clicking outside the sidebar (click-away = confirm).
  */
 export function commitAndDeselect(): void {
+  if (hasApiKey()) {
+    addPendingFromCurrentState();
+    observer.disconnect();
+    destroyControls();
+    if (sidebar) {
+      sidebar.hide();
+    }
+    resetState();
+    return;
+  }
+  // Path A: existing immediate behavior
   if (commitTimer) { clearTimeout(commitTimer); commitTimer = null; }
   observer.disconnect();
   commit();
