@@ -10,6 +10,10 @@
 
 **Spec:** `docs/superpowers/specs/2026-03-24-batched-claude-writes-design.md`
 
+**PR Strategy:** Split into two independently shippable PRs:
+- **PR1 (Tasks 1–6):** File discovery — grep-based resolution when fiber fails. Independently valuable, improves all users.
+- **PR2 (Tasks 7–20):** Batched Claude writes — pending store, Claude API apply, confirm/discard UX.
+
 ---
 
 ## File Structure
@@ -18,7 +22,8 @@
 |---|---|
 | `packages/cli/src/file-discovery.ts` | **New** — `discoverFile()` grep + `followReexport()` |
 | `packages/overlay/src/file-discovery-cache.ts` | **New** — 30s TTL cache for discovered file paths |
-| `packages/overlay/src/pending-changes.ts` | **New** — pending change store + `addToPending()` / `confirmAll()` |
+| `packages/overlay/src/pending-changes.ts` | **New** — pending change store + `addToPending()` / `confirmAll()` / `discardAll()` |
+| `packages/overlay/src/config.ts` | **New** — typed config module, `hasApiKey()` getter (replaces window global) |
 | `packages/cli/src/claude-shared.ts` | **New** — extracted `parseDiffResponse()`, `applyReplacements()`, `resolveReplacementOffset()` from generate.ts |
 | `packages/cli/src/claude-apply.ts` | **New** — `applyAllChanges()` orchestration using Claude API |
 | `packages/shared/src/types.ts` | Add `ApplyChange`, `applyAllChanges`, `applyAllComplete`, `discoverFile`, `discoverFileResult` message types |
@@ -31,7 +36,8 @@
 | `packages/overlay/src/drag.ts` | Path B: replace `reorder` send with `addToPending()` |
 | `packages/overlay/src/tools/move.ts` | Path B: replace `move` send with `addToPending()` |
 | `packages/overlay/src/utils/nth-of-type.ts` | **New** — shared `computeNthOfType(el)` utility |
-| `packages/overlay/src/toolbar.ts` | Add "Confirm Changes" button |
+| `packages/overlay/src/toolbar.ts` | Add "Confirm Changes" + "Discard" buttons |
+| `packages/overlay/src/changelog.ts` | Add pending/active state tracking for batched changes |
 | `packages/cli/src/generate.ts` | Refactor to import from claude-shared.ts |
 
 ---
@@ -65,31 +71,31 @@ describe("discoverFile", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("finds function declaration", () => {
+  it("finds function declaration", async () => {
     fs.writeFileSync(
       path.join(tmpDir, "src/components/Button.tsx"),
       'export function Button() { return <button>Click</button>; }'
     );
-    expect(discoverFile("Button", tmpDir)).toBe("src/components/Button.tsx");
+    expect(await discoverFile("Button", tmpDir)).toBe("src/components/Button.tsx");
   });
 
-  it("finds const arrow function", () => {
+  it("finds const arrow function", async () => {
     fs.writeFileSync(
       path.join(tmpDir, "src/components/Card.tsx"),
       'export const Card = () => <div>Card</div>;'
     );
-    expect(discoverFile("Card", tmpDir)).toBe("src/components/Card.tsx");
+    expect(await discoverFile("Card", tmpDir)).toBe("src/components/Card.tsx");
   });
 
-  it("finds export default function", () => {
+  it("finds export default function", async () => {
     fs.writeFileSync(
       path.join(tmpDir, "src/app/page.tsx"),
       'export default function HomePage() { return <main>Home</main>; }'
     );
-    expect(discoverFile("HomePage", tmpDir)).toBe("src/app/page.tsx");
+    expect(await discoverFile("HomePage", tmpDir)).toBe("src/app/page.tsx");
   });
 
-  it("skips barrel files and finds real definition", () => {
+  it("skips barrel files and finds real definition", async () => {
     fs.writeFileSync(
       path.join(tmpDir, "src/components/index.ts"),
       'export { CheckoutForm } from "./checkout-form";'
@@ -98,10 +104,10 @@ describe("discoverFile", () => {
       path.join(tmpDir, "src/components/checkout-form.tsx"),
       'export function CheckoutForm() { return <form>Checkout</form>; }'
     );
-    expect(discoverFile("CheckoutForm", tmpDir)).toBe("src/components/checkout-form.tsx");
+    expect(await discoverFile("CheckoutForm", tmpDir)).toBe("src/components/checkout-form.tsx");
   });
 
-  it("follows re-export when only barrel file matches", () => {
+  it("follows re-export when only barrel file matches", async () => {
     fs.writeFileSync(
       path.join(tmpDir, "src/components/index.ts"),
       'export { NavBar } from "./nav-bar";'
@@ -111,10 +117,10 @@ describe("discoverFile", () => {
       'export function NavBar() { return <nav>Nav</nav>; }'
     );
     // Only the barrel mentions NavBar in a definition-like context
-    expect(discoverFile("NavBar", tmpDir)).toBe("src/components/nav-bar.tsx");
+    expect(await discoverFile("NavBar", tmpDir)).toBe("src/components/nav-bar.tsx");
   });
 
-  it("prefers src/ files over root files", () => {
+  it("prefers src/ files over root files", async () => {
     fs.writeFileSync(
       path.join(tmpDir, "Button.tsx"),
       'export function Button() { return <button/>; }'
@@ -123,20 +129,20 @@ describe("discoverFile", () => {
       path.join(tmpDir, "src/components/Button.tsx"),
       'export function Button() { return <button/>; }'
     );
-    expect(discoverFile("Button", tmpDir)).toBe("src/components/Button.tsx");
+    expect(await discoverFile("Button", tmpDir)).toBe("src/components/Button.tsx");
   });
 
-  it("returns null for nonexistent component", () => {
-    expect(discoverFile("DoesNotExist", tmpDir)).toBeNull();
+  it("returns null for nonexistent component", async () => {
+    expect(await discoverFile("DoesNotExist", tmpDir)).toBeNull();
   });
 
-  it("ignores node_modules", () => {
+  it("ignores node_modules", async () => {
     fs.mkdirSync(path.join(tmpDir, "node_modules/some-lib"), { recursive: true });
     fs.writeFileSync(
       path.join(tmpDir, "node_modules/some-lib/Button.tsx"),
       'export function Button() { return <button/>; }'
     );
-    expect(discoverFile("Button", tmpDir)).toBeNull();
+    expect(await discoverFile("Button", tmpDir)).toBeNull();
   });
 });
 ```
@@ -152,22 +158,28 @@ Expected: FAIL — module not found
 // packages/cli/src/file-discovery.ts
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Discover which source file defines a React component by name.
- * Greps the project, ranks results by definition likelihood,
+ * Greps the project asynchronously (won't block the event loop),
+ * ranks results by definition likelihood,
  * follows re-exports in barrel files.
  */
-export function discoverFile(
+export async function discoverFile(
   componentName: string,
   projectRoot: string,
-): string | null {
+): Promise<string | null> {
   try {
-    const result = execSync(
-      `grep -rn "${componentName}" --include="*.tsx" --include="*.ts" --include="*.jsx" --include="*.js" --exclude-dir=node_modules --exclude-dir=.next --exclude-dir=dist .`,
-      { cwd: projectRoot, timeout: 3000, encoding: "utf-8" },
-    ).trim();
+    const { stdout } = await execFileAsync(
+      "grep",
+      ["-rn", componentName, "--include=*.tsx", "--include=*.ts", "--include=*.jsx", "--include=*.js", "--exclude-dir=node_modules", "--exclude-dir=.next", "--exclude-dir=dist", "."],
+      { cwd: projectRoot, timeout: 3000 },
+    );
+    const result = stdout.trim();
 
     if (!result) return null;
 
@@ -346,17 +358,51 @@ git commit -m "feat(overlay): add file discovery cache with 30s TTL"
 
 ---
 
-## Task 3: WebSocket Messages — `discoverFile` + `applyAllChanges` types
+## Task 3: WebSocket Messages — `discoverFile` types (PR1)
 
 **Files:**
 - Modify: `packages/shared/src/types.ts`
 
-- [ ] **Step 1: Add new message types to `ClientMessage`**
+- [ ] **Step 1: Add discoverFile message to `ClientMessage`**
 
 In `packages/shared/src/types.ts`, add to the `ClientMessage` union (after the `revertChanges` variant, ~line 63):
 
 ```typescript
   | { type: "discoverFile"; componentName: string }
+```
+
+- [ ] **Step 2: Add `discoverFileResult` to `ServerMessage`**
+
+Add to the `ServerMessage` union (~line 86):
+
+```typescript
+  | { type: "discoverFileResult"; componentName: string; filePath: string | null }
+```
+
+- [ ] **Step 3: Build shared package**
+
+Run: `pnpm build:shared`
+Expected: Build succeeds
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add packages/shared/src/types.ts
+git commit -m "feat(shared): add discoverFile/discoverFileResult message types"
+```
+
+---
+
+## Task 3.5: WebSocket Messages — `applyAllChanges` + `ApplyChange` types (PR2)
+
+> **Note:** This task is part of PR2. Do not implement until PR1 (Tasks 1–6) is merged.
+
+**Files:**
+- Modify: `packages/shared/src/types.ts`
+
+- [ ] **Step 1: Add `applyAllChanges` to `ClientMessage`**
+
+```typescript
   | { type: "applyAllChanges"; changes: ApplyChange[] }
 ```
 
@@ -430,12 +476,11 @@ export type ApplyChange =
     };
 ```
 
-- [ ] **Step 3: Add new `ServerMessage` variants**
+- [ ] **Step 3: Add `applyAllComplete` and `config` to `ServerMessage`**
 
 Add to the `ServerMessage` union (~line 86):
 
 ```typescript
-  | { type: "discoverFileResult"; componentName: string; filePath: string | null }
   | {
       type: "applyAllComplete";
       success: boolean;
@@ -444,7 +489,10 @@ Add to the `ServerMessage` union (~line 86):
       error?: string;
       undoIds: string[];
     }
+  | { type: "config"; hasApiKey: boolean }
 ```
+
+Note: `discoverFileResult` was already added in Task 3 (PR1).
 
 - [ ] **Step 4: Add `RevertData` variant**
 
@@ -463,7 +511,7 @@ Expected: Build succeeds
 
 ```bash
 git add packages/shared/src/types.ts
-git commit -m "feat(shared): add ApplyChange, discoverFile, applyAllComplete message types"
+git commit -m "feat(shared): add ApplyChange, applyAllComplete, config message types"
 ```
 
 ---
@@ -487,8 +535,10 @@ In the `ws.on("message")` handler (~line 322), add a new case alongside `"ping"`
 
 ```typescript
       case "discoverFile": {
-        const filePath = discoverFile(msg.componentName, projectRoot);
-        respond({ type: "discoverFileResult", componentName: msg.componentName, filePath });
+        // Async — won't block the event loop during grep
+        discoverFile(msg.componentName, projectRoot).then((filePath) => {
+          respond({ type: "discoverFileResult", componentName: msg.componentName, filePath });
+        });
         break;
       }
 ```
@@ -507,7 +557,7 @@ git commit -m "feat(server): add discoverFile handler for component→file resol
 
 ---
 
-## Task 5: Bridge — `requestFileDiscovery()` + `applyAllComplete` handler
+## Task 5: Bridge — `requestFileDiscovery()` (PR1)
 
 **Files:**
 - Modify: `packages/overlay/src/bridge.ts`
@@ -538,36 +588,16 @@ export function requestFileDiscovery(componentName: string): Promise<string | nu
 }
 ```
 
-- [ ] **Step 3: Add `onApplyAllComplete` listener registration**
-
-```typescript
-let applyAllCompleteListener: ((msg: Extract<ServerMessage, { type: "applyAllComplete" }>) => void) | null = null;
-
-export function onApplyAllComplete(
-  cb: (msg: Extract<ServerMessage, { type: "applyAllComplete" }>) => void,
-): void {
-  applyAllCompleteListener = cb;
-}
-```
-
-And in the `ws.onmessage` handler, add dispatch alongside the existing `commitResultListener` dispatch:
-
-```typescript
-if (parsed.type === "applyAllComplete" && applyAllCompleteListener) {
-  applyAllCompleteListener(parsed);
-}
-```
-
-- [ ] **Step 4: Build overlay**
+- [ ] **Step 3: Build overlay**
 
 Run: `pnpm build:overlay`
 Expected: Build succeeds
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add packages/overlay/src/bridge.ts
-git commit -m "feat(bridge): add requestFileDiscovery() and applyAllComplete listener"
+git commit -m "feat(bridge): add requestFileDiscovery() for grep-based file lookup"
 ```
 
 ---
@@ -635,6 +665,10 @@ git commit -m "feat(selection): add Layer 2 grep-based file discovery fallback"
 
 ---
 
+> **PR1 boundary.** Tasks 1–6 are an independent PR: file discovery + cache + wiring. Ship this first. Everything below is PR2.
+
+---
+
 ## Task 7: Extract shared Claude utilities from generate.ts
 
 **Files:**
@@ -648,9 +682,9 @@ Extract these functions from `generate.ts`:
 - `parseDiffResponse()` (~line 355–431)
 - `resolveReplacementOffset()` (~line 536–578)
 - `applyReplacements()` (~line 588–605)
-- `readSourceFiles()` (~line 60–81)
+- `readSourceFiles()` (~line 60–81) — **currently non-exported**, must be newly exported
 - `validateDiffChange()` (~line 466–512)
-- Related types: `ParsedChange`, `Replacement`, `UndoFileEntry`
+- Related types: `ParsedChange`, `Replacement`, `UndoFileEntry` — **Note:** `UndoFileEntry` is a local type in `generate.ts` (distinct from `UndoEntry` in shared types). It has `filePath`, `content` (before), and `afterContent` fields. Extract it alongside the functions.
 
 ```typescript
 // packages/cli/src/claude-shared.ts
@@ -694,6 +728,75 @@ Expected: All 108 tests pass — behavior unchanged, just moved code.
 ```bash
 git add packages/cli/src/claude-shared.ts packages/cli/src/generate.ts
 git commit -m "refactor(cli): extract shared Claude utilities into claude-shared.ts"
+```
+
+---
+
+## Task 7.5: Config module + Bridge PR2 additions
+
+**Files:**
+- Create: `packages/overlay/src/config.ts`
+- Modify: `packages/overlay/src/bridge.ts`
+
+- [ ] **Step 1: Create typed config module**
+
+```typescript
+// packages/overlay/src/config.ts
+// Centralized config — no window globals.
+
+let _hasApiKey = false;
+
+/** Called once when the CLI sends its config message on WebSocket connect. */
+export function setHasApiKey(value: boolean): void {
+  _hasApiKey = value;
+}
+
+/** Whether the CLI has an ANTHROPIC_API_KEY configured. */
+export function hasApiKey(): boolean {
+  return _hasApiKey;
+}
+```
+
+- [ ] **Step 2: Add config + applyAllComplete handling in bridge.ts**
+
+In bridge.ts `ws.onmessage` handler, add:
+
+```typescript
+import { setHasApiKey } from "./config.js";
+
+// In the message dispatch:
+if (parsed.type === "config") {
+  setHasApiKey(parsed.hasApiKey);
+}
+```
+
+Also add the `onApplyAllComplete` listener:
+
+```typescript
+let applyAllCompleteListener: ((msg: Extract<ServerMessage, { type: "applyAllComplete" }>) => void) | null = null;
+
+export function onApplyAllComplete(
+  cb: (msg: Extract<ServerMessage, { type: "applyAllComplete" }>) => void,
+): void {
+  applyAllCompleteListener = cb;
+}
+
+// In ws.onmessage dispatch:
+if (parsed.type === "applyAllComplete" && applyAllCompleteListener) {
+  applyAllCompleteListener(parsed);
+}
+```
+
+- [ ] **Step 3: Build overlay**
+
+Run: `pnpm build:overlay`
+Expected: Build succeeds
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add packages/overlay/src/config.ts packages/overlay/src/bridge.ts
+git commit -m "feat(overlay): add typed config module and applyAllComplete bridge handler"
 ```
 
 ---
@@ -860,6 +963,10 @@ const HAIKU_MODEL = "claude-haiku-4-5-20251001";
 const SONNET_MODEL = "claude-sonnet-4-6-20250514";
 
 function getModelForChanges(changes: ApplyChange[]): string {
+  // v1: whole batch uses one model. If any change is a reorder, use Sonnet.
+  // Known cost optimization for later: split batch — send property/text/move
+  // to Haiku, send reorders to Sonnet, merge results. Not worth the
+  // complexity for v1, but document it here for future reference.
   return changes.some((c) => c.type === "reorder") ? SONNET_MODEL : HAIKU_MODEL;
 }
 
@@ -1060,6 +1167,11 @@ export async function applyAllChanges(opts: {
   let failedCount = 0;
   const appliedChanges: FileChange[] = [];
 
+  // IMPORTANT: Collect all replacements per file FIRST, then write once.
+  // If two diffs target the same file and we write after each one,
+  // the second applyReplacements would work against stale content.
+  const replacementsByFile = new Map<string, { resolvedPath: string; replacements: any[]; descriptions: string[] }>();
+
   for (const diff of parsed) {
     const filePath = diff.filePath;
     const resolvedPath = path.isAbsolute(filePath)
@@ -1077,15 +1189,25 @@ export async function applyAllChanges(opts: {
       continue;
     }
 
-    const newContent = applyReplacements(original, validation.replacements!);
+    if (!replacementsByFile.has(filePath)) {
+      replacementsByFile.set(filePath, { resolvedPath, replacements: [], descriptions: [] });
+    }
+    const entry = replacementsByFile.get(filePath)!;
+    entry.replacements.push(...validation.replacements!);
+    entry.descriptions.push(diff.description || "Applied changes");
+  }
+
+  // Now write each file exactly once with all its replacements merged
+  for (const [filePath, { resolvedPath, replacements, descriptions }] of replacementsByFile) {
+    const original = sources.get(filePath)!;
+    const newContent = applyReplacements(original, replacements);
     fs.writeFileSync(resolvedPath, newContent, "utf-8");
 
-    // Update undo entry with after content
     const undoEntry = undoEntries.find((u) => u.filePath === resolvedPath);
     if (undoEntry) undoEntry.afterContent = newContent;
 
-    appliedCount++;
-    appliedChanges.push({ filePath, description: diff.description || "Applied changes" });
+    appliedCount += descriptions.length;
+    appliedChanges.push({ filePath, description: descriptions.join("; ") });
   }
 
   return {
@@ -1258,6 +1380,21 @@ git commit -m "feat(overlay): add shared computeNthOfType utility"
 **Files:**
 - Create: `packages/overlay/src/pending-changes.ts`
 - Create: `packages/overlay/src/__tests__/pending-changes.test.ts`
+- Modify: `packages/overlay/src/toolbar.ts` (update `showToast` signature)
+
+- [ ] **Step 0: Update `showToast` to accept severity level**
+
+The existing `showToast(message: string)` in `toolbar.ts` only accepts a message. The pending store needs severity levels for different toast types. Update the signature:
+
+```typescript
+export function showToast(
+  message: string,
+  level: "info" | "success" | "warning" | "error" = "info",
+): void {
+  // Existing implementation — optionally style background based on level:
+  // info: #1f2937, success: #065f46, warning: #92400e, error: #991b1b
+}
+```
 
 - [ ] **Step 1: Implement the pending changes store**
 
@@ -1269,17 +1406,20 @@ import { showToast } from "./toolbar.js";
 
 type PendingElementKey = string;
 
-function makeElementKey(
-  componentName: string,
-  filePath: string,
-  tag: string,
-  textContent: string,
-): PendingElementKey {
-  return `${componentName}:${filePath}:${tag}:${textContent.slice(0, 50)}`;
+/**
+ * Identity-based key using component name, file path, line/column, and tag.
+ * Stable within one HMR cycle. We clear pending changes after each apply,
+ * so line drift across HMR boundaries is fine.
+ */
+function makeElementKey(change: ApplyChange): PendingElementKey {
+  return `${change.componentName}:${change.filePath}:${change.lineHint}:${change.tag}`;
 }
+
+const APPLY_TIMEOUT_MS = 30_000;
 
 const pending = new Map<PendingElementKey, ApplyChange>();
 let applying = false;
+let applyTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let onCountChange: ((count: number) => void) | null = null;
 
 export function setOnCountChange(cb: (count: number) => void): void {
@@ -1291,8 +1431,7 @@ export function addToPending(change: ApplyChange): void {
     showToast("Cannot track changes — source file not resolved", "warning");
     return;
   }
-  const textContent = change.type === "property" ? change.textContent : "";
-  const key = makeElementKey(change.componentName, change.filePath, change.tag, textContent);
+  const key = makeElementKey(change);
 
   // Merge property updates on same element
   const existing = pending.get(key);
@@ -1329,17 +1468,48 @@ export function clearAll(): void {
   onCountChange?.(0);
 }
 
+/**
+ * Discard all pending changes and remove inline CSS previews.
+ * Called when user clicks "Discard" or presses Escape.
+ *
+ * v1 limitation: inline CSS previews applied by property-controller
+ * are not automatically reverted on discard. The user must refresh
+ * the page to clear stale previews. This is acceptable for v1 because:
+ * - HMR will reset styles on next code change
+ * - The visual inconsistency is temporary and non-destructive
+ * - Proper cleanup requires tracking applied inline overrides per element,
+ *   which is a non-trivial addition better suited for a follow-up.
+ */
+export function discardAll(): void {
+  clearAll();
+  showToast("Discarded all pending changes", "info");
+}
+
 export function confirmAll(): void {
   if (pending.size === 0 || applying) return;
   applying = true;
   onCountChange?.(pending.size); // triggers UI update to show spinner
 
   send({ type: "applyAllChanges", changes: getAllPending() });
+
+  // Safety timeout — if no response comes back (e.g. WebSocket disconnect),
+  // reset state so the user isn't stuck in limbo.
+  applyTimeoutId = setTimeout(() => {
+    if (applying) {
+      applying = false;
+      onCountChange?.(pending.size);
+      showToast("Apply timed out — changes still pending, try again", "error");
+    }
+  }, APPLY_TIMEOUT_MS);
 }
 
 // Listen for result
 onApplyAllComplete((msg) => {
   applying = false;
+  if (applyTimeoutId) {
+    clearTimeout(applyTimeoutId);
+    applyTimeoutId = null;
+  }
   if (msg.success) {
     clearAll();
     showToast(`Applied ${msg.appliedCount} change${msg.appliedCount === 1 ? "" : "s"}`, "success");
@@ -1370,7 +1540,7 @@ vi.mock("../toolbar.js", () => ({
   showToast: vi.fn(),
 }));
 
-import { addToPending, pendingCount, clearAll, getAllPending } from "../pending-changes.js";
+import { addToPending, pendingCount, clearAll, getAllPending, discardAll } from "../pending-changes.js";
 import type { ApplyChange } from "@frameup/shared";
 
 describe("pending-changes store", () => {
@@ -1473,24 +1643,16 @@ git commit -m "feat(overlay): add pending changes store with merge, confirmAll, 
 
 ---
 
-## Task 12: API key flag from CLI to overlay
+## Task 12: Server sends API key config on WebSocket connect
+
+> Config message type already added in Task 3.5. Bridge handler already added in Task 7.5. This task wires the server side.
 
 **Files:**
 - Modify: `packages/cli/src/server.ts`
-- Modify: `packages/overlay/src/bridge.ts`
-- Modify: `packages/shared/src/types.ts`
 
-- [ ] **Step 1: Add `config` message type**
+- [ ] **Step 1: Send config on WebSocket connect**
 
-In `types.ts` `ServerMessage`, add:
-
-```typescript
-  | { type: "config"; hasApiKey: boolean }
-```
-
-- [ ] **Step 2: Send config on WebSocket connect**
-
-In `server.ts`, in the `ws.on("connection")` handler, send:
+In `server.ts`, in the `ws.on("connection")` handler, send immediately after connection:
 
 ```typescript
 ws.send(JSON.stringify({
@@ -1499,31 +1661,21 @@ ws.send(JSON.stringify({
 }));
 ```
 
-- [ ] **Step 3: Set global flag in bridge.ts**
-
-In the `ws.onmessage` handler in bridge.ts:
-
-```typescript
-if (parsed.type === "config") {
-  (window as any).__FRAMEUP_HAS_API_KEY__ = parsed.hasApiKey;
-}
-```
-
-- [ ] **Step 4: Build and test**
+- [ ] **Step 2: Build and test**
 
 Run: `pnpm build && pnpm test`
 Expected: All tests pass
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add packages/shared/src/types.ts packages/cli/src/server.ts packages/overlay/src/bridge.ts
-git commit -m "feat: send API key availability flag from CLI to overlay on connect"
+git add packages/cli/src/server.ts
+git commit -m "feat(server): send API key config flag to overlay on WebSocket connect"
 ```
 
 ---
 
-## Task 13: "Confirm Changes" button in toolbar
+## Task 13: "Confirm Changes" + "Discard" buttons in toolbar
 
 **Files:**
 - Modify: `packages/overlay/src/toolbar.ts`
@@ -1532,23 +1684,28 @@ git commit -m "feat: send API key availability flag from CLI to overlay on conne
 
 Read: `packages/overlay/src/toolbar.ts` lines 186–220
 
-- [ ] **Step 2: Add "Confirm Changes" button to the toolbar HTML template**
+- [ ] **Step 2: Add "Confirm Changes" and "Discard" buttons to the toolbar HTML template**
 
-Add a button **before the close button** in the template (~line 197), so it appears between the generate and close buttons:
+Add buttons **before the close button** in the template (~line 197), so they appear between the generate and close buttons:
 
 ```html
-<button class="confirm-btn" style="display:none" title="Confirm Changes">
-  Confirm Changes
-</button>
+<div class="pending-actions" style="display:none">
+  <button class="confirm-btn" title="Confirm Changes">Confirm Changes</button>
+  <button class="discard-btn" title="Discard all pending changes">✕</button>
+</div>
 ```
 
-- [ ] **Step 3: Add styling for the confirm button**
+- [ ] **Step 3: Add styling for the pending action buttons**
 
 Add CSS in the toolbar's `<style>` block:
 
 ```css
-.confirm-btn {
+.pending-actions {
   display: none;
+  align-items: center;
+  gap: 4px;
+}
+.confirm-btn {
   padding: 4px 12px;
   background: #2563eb;
   color: white;
@@ -1561,39 +1718,64 @@ Add CSS in the toolbar's `<style>` block:
 }
 .confirm-btn:hover { background: #1d4ed8; }
 .confirm-btn:disabled { opacity: 0.5; cursor: wait; }
+.discard-btn {
+  padding: 4px 8px;
+  background: transparent;
+  color: #9ca3af;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.discard-btn:hover { color: #ef4444; border-color: #ef4444; }
 ```
 
-- [ ] **Step 4: Wire up the button click + count updates**
+- [ ] **Step 4: Wire up button clicks + count updates + Escape key**
 
 In `mountToolbar()`, after existing button listeners:
 
 ```typescript
+const pendingActions = shadow.querySelector(".pending-actions") as HTMLDivElement;
 const confirmBtn = shadow.querySelector(".confirm-btn") as HTMLButtonElement;
+const discardBtn = shadow.querySelector(".discard-btn") as HTMLButtonElement;
 
 // Update button visibility and text when pending count changes
 setOnCountChange((count) => {
   if (count > 0 && !isApplying()) {
-    confirmBtn.style.display = "inline-block";
+    pendingActions.style.display = "flex";
     confirmBtn.textContent = `Confirm Changes (${count})`;
     confirmBtn.disabled = false;
   } else if (isApplying()) {
-    confirmBtn.style.display = "inline-block";
+    pendingActions.style.display = "flex";
     confirmBtn.textContent = "Applying...";
     confirmBtn.disabled = true;
+    discardBtn.style.display = "none";
   } else {
-    confirmBtn.style.display = "none";
+    pendingActions.style.display = "none";
+    discardBtn.style.display = "inline-block";
   }
 });
 
 confirmBtn.addEventListener("click", () => {
   confirmAll();
 });
+
+discardBtn.addEventListener("click", () => {
+  discardAll();
+});
+
+// Escape key discards all pending changes
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && pendingCount() > 0 && !isApplying()) {
+    discardAll();
+  }
+});
 ```
 
 Add imports at top of toolbar.ts:
 
 ```typescript
-import { setOnCountChange, confirmAll, isApplying } from "./pending-changes.js";
+import { setOnCountChange, confirmAll, discardAll, isApplying, pendingCount } from "./pending-changes.js";
 ```
 
 - [ ] **Step 5: Build and manual test**
@@ -1623,12 +1805,12 @@ Read: `packages/overlay/src/properties/property-controller.ts` lines 395–401 (
 
 Replace the body of `scheduledCommit()` (~line 395–401):
 
-**Important:** This step depends on Task 15 (API key flag) being implemented first. The overlay runs in the browser and can't read `process.env`. Task 15 sets `window.__FRAMEUP_HAS_API_KEY__` via a WebSocket config message from the CLI on connect.
+**Important:** This step depends on Task 7.5 (config module) and Task 12 (API key flag) being implemented first. The overlay runs in the browser and can't read `process.env`. Task 12 sends the flag via WebSocket; Task 7.5's config module exposes `hasApiKey()`.
 
 ```typescript
 function scheduledCommit(): void {
   // Path B: API key present → batch, don't write immediately
-  if ((window as any).__FRAMEUP_HAS_API_KEY__) {
+  if (hasApiKey()) {
     addPendingFromCurrentState();
     return;
   }
@@ -1643,6 +1825,7 @@ function scheduledCommit(): void {
 ```typescript
 import { addToPending } from "../pending-changes.js";
 import { computeNthOfType } from "../utils/nth-of-type.js";
+import { hasApiKey } from "../config.js";
 
 function addPendingFromCurrentState(): void {
   if (!state.selectedElement || !state.componentInfo || state.pendingBatch.size === 0) return;
@@ -1651,15 +1834,24 @@ function addPendingFromCurrentState(): void {
   const info = state.componentInfo;
   const parentEl = el.parentElement;
 
+  // PendingUpdate has: property, cssProperty, value, tailwindPrefix, tailwindToken, originalValue
+  // We need to compute oldClass/newClass from the className string + prefix.
+  const currentClassName = el.className || "";
   const updates: Array<{ cssProperty: string; tailwindPrefix: string; tailwindToken: string | null; value: string; oldClass: string; newClass: string }> = [];
   for (const [cssProperty, entry] of state.pendingBatch) {
+    // Find the old class: the class in the original className that starts with this prefix
+    const classes = currentClassName.split(/\s+/);
+    const oldClass = state.originalValues.has(entry.property)
+      ? classes.find((c) => c.startsWith(entry.tailwindPrefix + "-") || c === entry.tailwindPrefix) || ""
+      : "";
+    const newClass = entry.tailwindToken || "";
     updates.push({
       cssProperty,
       tailwindPrefix: entry.tailwindPrefix,
       tailwindToken: entry.tailwindToken,
       value: entry.value,
-      oldClass: entry.originalClass || "",
-      newClass: entry.newClass || "",
+      oldClass,
+      newClass,
     });
   }
 
@@ -1679,18 +1871,14 @@ function addPendingFromCurrentState(): void {
 }
 ```
 
-- [ ] **Step 4: Add auto-confirm on deselect for single changes**
+- [ ] **Step 4: Wire `commitAndDeselect()` to pending store (no auto-confirm)**
 
-In `commitAndDeselect()` (~line 822), modify to use pending store when Path B is active:
+In `commitAndDeselect()` (~line 822), add to pending but do NOT auto-confirm. The change stays pending until the user explicitly clicks "Confirm Changes". This avoids surprise 2-3s API calls when the user is just previewing.
 
 ```typescript
 function commitAndDeselect(): void {
-  if ((window as any).__FRAMEUP_HAS_API_KEY__) {
+  if (hasApiKey()) {
     addPendingFromCurrentState();
-    // Auto-confirm if exactly 1 pending change (single element edited + deselected)
-    if (pendingCount() === 1) {
-      confirmAll();
-    }
     deselect();
     return;
   }
@@ -1699,33 +1887,34 @@ function commitAndDeselect(): void {
 }
 ```
 
-Add import for `pendingCount` and `confirmAll`:
-
-```typescript
-import { addToPending, pendingCount, confirmAll } from "../pending-changes.js";
-```
-
-- [ ] **Step 6: Add read-only "Preview only" mode when filePath is empty**
+- [ ] **Step 5: Add read-only "Preview only" mode when filePath is empty**
 
 In `inspect()` (~line 533), after checking `info.filePath`:
 
 ```typescript
 if (!info.filePath) {
-  // Layer 3: no file found — read-only mode
-  // Still render the sidebar with computed values, but disable all controls
-  // Show "Preview only — source not found" label
   state.readOnly = true;
 }
 ```
 
-And in `renderSections()` / control creation, check `state.readOnly` to disable inputs and show the label.
+**Read-only mode UI specification:**
 
-- [ ] **Step 7: Build and test**
+1. **Banner at top of sidebar:** A yellow/amber banner with icon: `"⚠ Preview only — source file not found"`. Styled with `background: #fef3c7; color: #92400e; padding: 8px 12px; border-radius: 6px; font-size: 11px; margin-bottom: 8px;`
+
+2. **All property controls disabled:** Add `pointer-events: none; opacity: 0.5;` to all slider, color picker, and input elements when `state.readOnly` is true. Users can still see computed values but cannot interact.
+
+3. **No text editing:** Suppress double-click-to-edit text when `state.readOnly` is true (check in the inline-text-edit entry point).
+
+4. **No drag:** Suppress drag initiation when the selected element is in read-only mode.
+
+5. **Why it matters:** Without this, users click a library wrapper element (e.g., framer-motion), see the sidebar open, try to change something, and get a confusing error when the change can't be applied. Read-only mode sets expectations upfront.
+
+- [ ] **Step 6: Build and test**
 
 Run: `pnpm build && pnpm test`
 Expected: All tests pass
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add packages/overlay/src/properties/property-controller.ts
@@ -1750,9 +1939,10 @@ In `commitAndExit()`, before the existing `send({ type: "updateText" ... })` blo
 ```typescript
 import { addToPending } from "./pending-changes.js";
 import { computeNthOfType } from "./utils/nth-of-type.js";
+import { hasApiKey } from "./config.js";
 
 // Path B: API key present → add to pending store
-if ((window as any).__FRAMEUP_HAS_API_KEY__ && componentInfo.filePath) {
+if (hasApiKey() && componentInfo.filePath) {
   const el = editingElement;
   const parentEl = el?.parentElement;
 
@@ -1803,8 +1993,11 @@ Read: `packages/overlay/src/drag.ts` lines 234–241
 Before the existing `send({ type: "reorder" ... })` block (~line 234):
 
 ```typescript
+import { addToPending } from "./pending-changes.js";
+import { hasApiKey } from "./config.js";
+
 // Path B: API key present → add to pending store
-if (window.__FRAMEUP_HAS_API_KEY__) {
+if (hasApiKey()) {
   const parentEl = dragSelection.element?.parentElement;
   const children = parentEl ? Array.from(parentEl.children) : [];
   const childrenContext = children.map((child) => ({
@@ -1860,9 +2053,10 @@ Read: `packages/overlay/src/tools/move.ts` — find where the `move` message is 
 ```typescript
 import { addToPending } from "../pending-changes.js";
 import { computeNthOfType } from "../utils/nth-of-type.js";
+import { hasApiKey } from "../config.js";
 
 // Path B: API key present → add to pending store
-if ((window as any).__FRAMEUP_HAS_API_KEY__ && componentInfo.filePath) {
+if (hasApiKey() && componentInfo.filePath) {
   const el = moveState.element;
   const parentEl = el?.parentElement;
 
@@ -1900,7 +2094,60 @@ git commit -m "feat(move): add Path B pending store for move edits"
 
 ---
 
-## Task 18: Full integration test
+## Task 18: Changelog integration for batched changes
+
+**Files:**
+- Modify: `packages/overlay/src/changelog.ts`
+- Modify: `packages/overlay/src/pending-changes.ts`
+
+- [ ] **Step 1: Read changelog.ts to understand the existing entry format**
+
+Read: `packages/overlay/src/changelog.ts`
+Note the `addEntry()` function, `ChangelogEntry` type, and how revert data is structured.
+
+- [ ] **Step 2: Add "pending" state to changelog entries**
+
+When `addToPending()` is called, create a changelog entry with `state: "pending"`:
+
+```typescript
+// In pending-changes.ts, after adding to the pending map:
+import { addEntry } from "./changelog.js";
+
+addEntry({
+  description: formatPendingDescription(change),
+  state: "pending",
+  // No revert data yet — change hasn't been applied to disk
+});
+```
+
+- [ ] **Step 3: Promote entries to "active" on successful apply**
+
+In the `onApplyAllComplete` handler, promote all pending entries to active:
+
+```typescript
+// After msg.success:
+promoteAllPending(); // Mark all "pending" entries as "active"
+```
+
+- [ ] **Step 4: Remove pending entries on discard**
+
+In `discardAll()`, remove all changelog entries with `state: "pending"`.
+
+- [ ] **Step 5: Build and test**
+
+Run: `pnpm build`
+Expected: Build succeeds
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/overlay/src/changelog.ts packages/overlay/src/pending-changes.ts
+git commit -m "feat(changelog): track pending/active state for batched changes"
+```
+
+---
+
+## Task 19: Full integration test
 
 - [ ] **Step 1: Build everything**
 
@@ -1926,10 +2173,18 @@ Expected: All CLI tests (108+) and overlay tests (48+) pass
 1. Set `ANTHROPIC_API_KEY=sk-ant-...` in `.env`
 2. Restart FrameUp
 3. Click an element → change font-size → verify preview only (no file write)
-4. Click a second element → verify first element's changes auto-confirm
-5. Change multiple elements → verify "Confirm Changes (N)" button appears
+4. Click a second element → verify first element's change stays pending (no auto-confirm)
+5. Verify "Confirm Changes (2)" button appears with discard (✕) button
 6. Click "Confirm Changes" → verify all changes apply and file updates
 7. Verify HMR fires and page updates
+
+- [ ] **Step 4.5: Manual test — Discard flow**
+
+1. Make changes to 2-3 elements (Path B, API key set)
+2. Verify "Confirm Changes (N)" shows in toolbar
+3. Press Escape → verify all pending changes cleared, inline previews removed, toast shows "Discarded"
+4. Alternatively: click the ✕ discard button → same behavior
+5. Verify changelog panel cleared pending entries
 
 - [ ] **Step 5: Manual test — file discovery (Layer 2)**
 
@@ -1946,6 +2201,6 @@ Expected: All CLI tests (108+) and overlay tests (48+) pass
 - [ ] **Step 7: Commit**
 
 ```bash
-git add -A
+git add packages/
 git commit -m "feat: complete batched Claude API writes with dual-path system"
 ```
