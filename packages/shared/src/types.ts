@@ -60,7 +60,8 @@ export type ClientMessage =
       originalText: string;
       newText: string;
     }
-  | { type: "revertChanges"; undoIds: string[] };
+  | { type: "revertChanges"; undoIds: string[] }
+  | { type: "discoverFile"; componentName: string };
 
 export type ServerMessage =
   | { type: "reorderComplete"; success: boolean; error?: string }
@@ -83,7 +84,8 @@ export type ServerMessage =
   | { type: "generateProgress"; stage: GenerateStage; message: string }
   | { type: "generateComplete"; success: boolean; changes: FileChange[]; error?: string; undoIds?: string[] }
   | { type: "updateTextComplete"; success: boolean; error?: string; reason?: string; undoId?: string }
-  | { type: "revertComplete"; results: Array<{ undoId: string; success: boolean; error?: string }> };
+  | { type: "revertComplete"; results: Array<{ undoId: string; success: boolean; error?: string }> }
+  | { type: "discoverFileResult"; componentName: string; filePath: string | null };
 
 export interface ComponentInfo {
   tagName: string;
