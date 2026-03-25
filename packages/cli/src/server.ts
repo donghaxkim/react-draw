@@ -312,6 +312,16 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
       console.warn("[FrameUp] Could not resolve Tailwind config:", err);
     }
 
+    // Send config — tells overlay whether API key is available for Path B
+    // NOTE: Config is sent once on connect and never updated. If the user adds
+    // an API key to .env after FrameUp starts, the overlay won't know until
+    // FrameUp is restarted. This is acceptable — .env changes require a process
+    // restart by convention.
+    send(ws, {
+      type: "config",
+      hasApiKey: !!(apiKey || process.env.ANTHROPIC_API_KEY),
+    } as any);
+
     ws.on("message", (data) => {
       let msg: ClientMessage;
       try {
