@@ -431,6 +431,7 @@ export type ApplyChange =
         value: string;
         oldClass: string;
         newClass: string;
+        relatedOldClasses: string[]; // shorthand classes to split (e.g. ["p-4"] when changing pt)
       }>;
     }
   | {
@@ -836,6 +837,7 @@ describe("buildApplyPrompt", () => {
           value: "#3b82f6",
           oldClass: "bg-red-500",
           newClass: "bg-blue-500",
+          relatedOldClasses: [],
         }],
       }],
       new Map([["src/Button.tsx", '1: export function Button() {\n2:   return <button className="bg-red-500 p-2">Submit</button>;\n3: }']]),
@@ -1072,7 +1074,16 @@ function formatChange(change: ApplyChange): string {
       s += `   ${locator}\n`;
       s += `   Changes:\n`;
       for (const u of change.updates) {
-        s += `     - Replace class \`${u.oldClass}\` with \`${u.newClass}\`\n`;
+        if (u.relatedOldClasses.length > 0) {
+          // Shorthand splitting: e.g. changing pt when p-4 exists
+          s += `     - The element has shorthand class \`${u.relatedOldClasses.join("`, `")}\`. `;
+          s += `Split it: replace the shorthand with individual side classes, `;
+          s += `using \`${u.newClass}\` for the \`${u.tailwindPrefix}\` side.\n`;
+        } else if (u.oldClass) {
+          s += `     - Replace class \`${u.oldClass}\` with \`${u.newClass}\`\n`;
+        } else {
+          s += `     - Add class \`${u.newClass}\`\n`;
+        }
       }
       s += `   Keep all other classes exactly as they are.`;
       return s;
@@ -1895,16 +1906,48 @@ function addPendingFromCurrentState(): void {
   const info = state.componentInfo;
   const parentEl = el.parentElement;
 
-  // PendingUpdate has: property, cssProperty, value, tailwindPrefix, tailwindToken, originalValue
-  // We need to compute oldClass/newClass from the className string + prefix.
-  // Use classMatchesPrefix() — the same matching logic transform.ts uses in
-  // updateClassName(). This handles standalone classes (flex, hidden, relative),
-  // prefixed classes (bg-red-500), and avoids false matches (bg- matching bg-gradient-to-r).
+  // PendingUpdate has: property, cssProperty, value, tailwindPrefix, tailwindToken,
+  // relatedPrefixes, originalValue. We need oldClass/newClass for Claude.
+  //
+  // Three matching layers (mirroring transform.ts applyUpdate logic):
+  // 1. classPattern — disambiguates shared prefixes (e.g. "text" used by
+  //    font-size, color, and text-align). Without this, text-red-500 would
+  //    match when looking for a font-size old class.
+  // 2. relatedPrefixes — shorthand classes (p-4 → pt pr pb pl). If p-4 exists
+  //    and we're changing pt, Claude needs to know about p-4 so it can split
+  //    the shorthand correctly.
+  // 3. Direct prefix — classMatchesPrefix(cls, tailwindPrefix).
   const originalClassName = el.getAttribute("class") || "";
   const classes = originalClassName.split(/\s+/).filter(Boolean);
-  const updates: Array<{ cssProperty: string; tailwindPrefix: string; tailwindToken: string | null; value: string; oldClass: string; newClass: string }> = [];
+  const updates: Array<{
+    cssProperty: string;
+    tailwindPrefix: string;
+    tailwindToken: string | null;
+    value: string;
+    oldClass: string;
+    newClass: string;
+    relatedOldClasses: string[];
+  }> = [];
+
   for (const [cssProperty, entry] of state.pendingBatch) {
-    const oldClass = classes.find((c) => classMatchesPrefix(c, entry.tailwindPrefix)) || "";
+    const desc = DESCRIPTOR_MAP.get(entry.property);
+
+    // Layer 1: Use classPattern if available (disambiguates shared prefixes like "text")
+    let oldClass = "";
+    if (desc?.classPattern) {
+      const pattern = new RegExp(desc.classPattern);
+      oldClass = classes.find((c) => !c.includes(":") && pattern.test(c)) || "";
+    } else {
+      oldClass = classes.find((c) => classMatchesPrefix(c, entry.tailwindPrefix)) || "";
+    }
+
+    // Layer 2: Find related shorthand classes (e.g. p-4 when changing pt)
+    const relatedOldClasses: string[] = [];
+    for (const rp of entry.relatedPrefixes ?? []) {
+      const found = classes.find((c) => classMatchesPrefix(c, rp));
+      if (found) relatedOldClasses.push(found);
+    }
+
     const newClass = entry.tailwindToken || "";
     updates.push({
       cssProperty,
@@ -1913,6 +1956,7 @@ function addPendingFromCurrentState(): void {
       value: entry.value,
       oldClass,
       newClass,
+      relatedOldClasses,
     });
   }
 
