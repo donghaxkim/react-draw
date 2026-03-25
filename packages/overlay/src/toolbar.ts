@@ -339,7 +339,10 @@ export function updateComponentDetail(info: {
   componentDetailEl.innerHTML = `<span class="tag">&lt;${info.tagName}&gt;</span><span class="name">${info.componentName}</span>${shortPath ? `<span class="path">${shortPath}</span>` : ""}`;
 }
 
-export function showToast(message: string): void {
+export function showToast(
+  message: string,
+  level: "info" | "success" | "warning" | "error" = "info",
+): void {
   if (!toastEl) return;
   toastEl.textContent = message;
   toastEl.classList.add("visible");
