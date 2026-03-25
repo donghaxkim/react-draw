@@ -16,7 +16,8 @@
 // Therefore, no viewportToPage/pageToViewport mapping is needed in this module.
 //
 import { getFiberFromHostInstance, getDisplayName, isCompositeFiber, isInstrumentationActive, instrument } from "bippy";
-import { getOwnerStack, normalizeFileName, isSourceFile } from "bippy/source";
+import { getOwnerStack } from "bippy/source";
+import { resolveFrameFilePath } from "./utils/source-resolve.js";
 import type { ComponentInfo } from "@frameup/shared";
 import { getShadowRoot, updateComponentDetail } from "./toolbar.js";
 import { isInternalName, isFullPageElement, isValidElement } from "./utils/component-filter.js";
@@ -27,6 +28,8 @@ import { inspect, deselect as deselectProperty, commitAndDeselect, cancel as can
 import { getPageElementAtPoint, isPanningActive } from "./interaction.js";
 import { tryStartMove, updateMovePosition, endMove } from "./tools/move.js";
 import { getMoveContainingElement, hasMoveForElement } from "./canvas-state.js";
+import { getCachedFilePath, setCachedFilePath } from "./file-discovery-cache.js";
+import { requestFileDiscovery } from "./bridge.js";
 import { isTextEditing } from "./inline-text-edit.js";
 
 // Ensure bippy instrumentation is active so we can read fiber info
@@ -66,13 +69,7 @@ async function resolveComponentFromElement(el: HTMLElement): Promise<ResolvedCom
         if (name[0] !== name[0].toUpperCase()) continue;
         if (isInternalName(name)) continue;
 
-        let filePath = "";
-        if (frame.fileName) {
-          const normalized = normalizeFileName(frame.fileName);
-          if (isSourceFile(normalized)) {
-            filePath = normalized;
-          }
-        }
+        const filePath = resolveFrameFilePath(frame.fileName);
 
         stack.push({
           componentName: name,
@@ -83,12 +80,14 @@ async function resolveComponentFromElement(el: HTMLElement): Promise<ResolvedCom
       }
 
       if (stack.length > 0) {
+        // Prefer the first frame with a resolved file path (skip library wrappers)
+        const primary = stack.find(f => f.filePath) || stack[0];
         return {
           tagName: el.tagName.toLowerCase(),
-          componentName: stack[0].componentName,
-          filePath: stack[0].filePath,
-          lineNumber: stack[0].lineNumber,
-          columnNumber: stack[0].columnNumber,
+          componentName: primary.componentName,
+          filePath: primary.filePath,
+          lineNumber: primary.lineNumber,
+          columnNumber: primary.columnNumber,
           stack,
         };
       }
@@ -603,6 +602,36 @@ export async function selectElement(el: HTMLElement, options?: { skipSidebar?: b
     hideHoverOverlay();
 
     const resolved = (await resolveComponentFromElement(el)) ?? buildFallbackSelection(el);
+
+    // Layer 2: grep-based discovery when filePath is empty
+    if (!resolved.filePath && resolved.componentName) {
+      const cached = getCachedFilePath(resolved.componentName);
+      if (cached === undefined) {
+        // Not looked up yet — ask CLI
+        const discovered = await requestFileDiscovery(resolved.componentName);
+        setCachedFilePath(resolved.componentName, discovered);
+        if (discovered) {
+          resolved.filePath = discovered;
+          if (resolved.stack) {
+            for (const frame of resolved.stack) {
+              if (frame.componentName === resolved.componentName && !frame.filePath) {
+                frame.filePath = discovered;
+              }
+            }
+          }
+        }
+      } else if (cached) {
+        resolved.filePath = cached;
+        if (resolved.stack) {
+          for (const frame of resolved.stack) {
+            if (frame.componentName === resolved.componentName && !frame.filePath) {
+              frame.filePath = cached;
+            }
+          }
+        }
+      }
+    }
+
     console.log("[FrameUp] selectElement:", el.tagName, "→", resolved.componentName, resolved.filePath, "stack:", resolved.stack?.map(s => s.componentName));
 
     currentSelection = {

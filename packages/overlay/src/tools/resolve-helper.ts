@@ -1,9 +1,12 @@
 // packages/overlay/src/tools/resolve-helper.ts
 import type { ComponentRef } from "@frameup/shared";
 import { getFiberFromHostInstance, isCompositeFiber, getDisplayName } from "bippy";
-import { getOwnerStack, normalizeFileName, isSourceFile } from "bippy/source";
+import { getOwnerStack } from "bippy/source";
+import { resolveFrameFilePath } from "../utils/source-resolve.js";
 import { isInternalName } from "../utils/component-filter.js";
 import { getPageElementAtPoint } from "../interaction.js";
+import { getCachedFilePath, setCachedFilePath } from "../file-discovery-cache.js";
+import { requestFileDiscovery } from "../bridge.js";
 
 /**
  * Async resolve of the nearest React component under a viewport point.
@@ -17,6 +20,8 @@ export async function resolveComponentAtPoint(clientX: number, clientY: number):
   const fiber = getFiberFromHostInstance(el);
   if (!fiber) return null;
 
+  let result: ComponentRef | null = null;
+
   // Try owner stack first (React 19 + source map symbolication)
   try {
     const frames = await getOwnerStack(fiber);
@@ -27,17 +32,14 @@ export async function resolveComponentAtPoint(clientX: number, clientY: number):
         if (name[0] !== name[0].toUpperCase()) continue;
         if (isInternalName(name)) continue;
 
-        let filePath = "";
-        if (frame.fileName) {
-          const normalized = normalizeFileName(frame.fileName);
-          if (isSourceFile(normalized)) filePath = normalized;
-        }
+        const filePath = resolveFrameFilePath(frame.fileName);
 
-        return {
+        result = {
           componentName: name,
           filePath,
           lineNumber: frame.lineNumber ?? 0,
         };
+        break;
       }
     }
   } catch {
@@ -45,22 +47,40 @@ export async function resolveComponentAtPoint(clientX: number, clientY: number):
   }
 
   // Fallback: synchronous fiber walk (React 18 / _debugSource)
-  let current = fiber;
-  while (current) {
-    if (isCompositeFiber(current)) {
-      const name = getDisplayName(current.type);
-      if (name && name[0] === name[0].toUpperCase() && !isInternalName(name)) {
-        const debugSource = (current as any)._debugSource || (current as any)._debugOwner?._debugSource;
-        return {
-          componentName: name,
-          filePath: debugSource?.fileName || "",
-          lineNumber: debugSource?.lineNumber || 0,
-        };
+  if (!result) {
+    let current = fiber;
+    while (current) {
+      if (isCompositeFiber(current)) {
+        const name = getDisplayName(current.type);
+        if (name && name[0] === name[0].toUpperCase() && !isInternalName(name)) {
+          const debugSource = (current as any)._debugSource || (current as any)._debugOwner?._debugSource;
+          result = {
+            componentName: name,
+            filePath: debugSource?.fileName || "",
+            lineNumber: debugSource?.lineNumber || 0,
+          };
+          break;
+        }
       }
+      current = current.return;
     }
-    current = current.return;
   }
-  return null;
+
+  // Layer 2: grep-based discovery when filePath is empty
+  if (result && !result.filePath && result.componentName) {
+    const cached = getCachedFilePath(result.componentName);
+    if (cached === undefined) {
+      const discovered = await requestFileDiscovery(result.componentName);
+      setCachedFilePath(result.componentName, discovered);
+      if (discovered) {
+        result.filePath = discovered;
+      }
+    } else if (cached) {
+      result.filePath = cached;
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -71,6 +91,8 @@ export async function resolveComponentFromElement(el: HTMLElement): Promise<Comp
   const fiber = getFiberFromHostInstance(el);
   if (!fiber) return null;
 
+  let result: ComponentRef | null = null;
+
   try {
     const frames = await getOwnerStack(fiber);
     if (frames && frames.length > 0) {
@@ -80,37 +102,52 @@ export async function resolveComponentFromElement(el: HTMLElement): Promise<Comp
         if (name[0] !== name[0].toUpperCase()) continue;
         if (isInternalName(name)) continue;
 
-        let filePath = "";
-        if (frame.fileName) {
-          const normalized = normalizeFileName(frame.fileName);
-          if (isSourceFile(normalized)) filePath = normalized;
-        }
+        const filePath = resolveFrameFilePath(frame.fileName);
 
-        return {
+        result = {
           componentName: name,
           filePath,
           lineNumber: frame.lineNumber ?? 0,
         };
+        break;
       }
     }
   } catch {
     // Fall through to fiber walk
   }
 
-  let current = fiber;
-  while (current) {
-    if (isCompositeFiber(current)) {
-      const name = getDisplayName(current.type);
-      if (name && name[0] === name[0].toUpperCase() && !isInternalName(name)) {
-        const debugSource = (current as any)._debugSource || (current as any)._debugOwner?._debugSource;
-        return {
-          componentName: name,
-          filePath: debugSource?.fileName || "",
-          lineNumber: debugSource?.lineNumber || 0,
-        };
+  if (!result) {
+    let current = fiber;
+    while (current) {
+      if (isCompositeFiber(current)) {
+        const name = getDisplayName(current.type);
+        if (name && name[0] === name[0].toUpperCase() && !isInternalName(name)) {
+          const debugSource = (current as any)._debugSource || (current as any)._debugOwner?._debugSource;
+          result = {
+            componentName: name,
+            filePath: debugSource?.fileName || "",
+            lineNumber: debugSource?.lineNumber || 0,
+          };
+          break;
+        }
       }
+      current = current.return;
     }
-    current = current.return;
   }
-  return null;
+
+  // Layer 2: grep-based discovery when filePath is empty
+  if (result && !result.filePath && result.componentName) {
+    const cached = getCachedFilePath(result.componentName);
+    if (cached === undefined) {
+      const discovered = await requestFileDiscovery(result.componentName);
+      setCachedFilePath(result.componentName, discovered);
+      if (discovered) {
+        result.filePath = discovered;
+      }
+    } else if (cached) {
+      result.filePath = cached;
+    }
+  }
+
+  return result;
 }
