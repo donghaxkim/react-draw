@@ -1,6 +1,7 @@
 // packages/overlay/src/bridge.ts
 import type { ClientMessage, ServerMessage } from "@frameup/shared";
 import { setCliTokens } from "./properties/tailwind-resolver.js";
+import { setHasApiKey } from "./config.js";
 
 type MessageHandler = (msg: ServerMessage) => void;
 
@@ -19,6 +20,15 @@ let commitResultListener: CommitResultListener | null = null;
 
 export function onCommitResult(fn: CommitResultListener): void {
   commitResultListener = fn;
+}
+
+type ApplyAllCompleteMsg = Extract<ServerMessage, { type: "applyAllComplete" }>;
+let applyAllCompleteListener: ((msg: ApplyAllCompleteMsg) => void) | null = null;
+
+export function onApplyAllComplete(
+  cb: (msg: ApplyAllCompleteMsg) => void,
+): void {
+  applyAllCompleteListener = cb;
 }
 
 export function connect(port: number): void {
@@ -45,6 +55,14 @@ export function connect(port: number): void {
       // Surface transform commit results
       if (msg.type === "updatePropertyComplete" && commitResultListener) {
         commitResultListener(msg.success, msg.errorCode, msg.error);
+      }
+      // Handle config from CLI (sent on connect)
+      if (msg.type === "config") {
+        setHasApiKey(msg.hasApiKey);
+      }
+      // Handle apply-all completion
+      if (msg.type === "applyAllComplete" && applyAllCompleteListener) {
+        applyAllCompleteListener(msg as any);
       }
       messageHandlers.forEach((handler) => handler(msg));
     } catch {
