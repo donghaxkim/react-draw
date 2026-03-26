@@ -408,6 +408,30 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
           break;
         }
 
+        case "fileStat": {
+          if (!isProjectFilePathSafe(msg.filePath, projectRoot)) {
+            send(ws, { type: "fileStatResult", filePath: msg.filePath, mtime: 0, size: 0 } as any);
+            break;
+          }
+          const resolvedStatPath = resolveProjectFilePath(msg.filePath, projectRoot);
+          if (!resolvedStatPath) {
+            send(ws, { type: "fileStatResult", filePath: msg.filePath, mtime: 0, size: 0 } as any);
+            break;
+          }
+          try {
+            const stat = fs.statSync(resolvedStatPath);
+            send(ws, {
+              type: "fileStatResult",
+              filePath: msg.filePath,
+              mtime: stat.mtimeMs,
+              size: stat.size,
+            } as any);
+          } catch {
+            send(ws, { type: "fileStatResult", filePath: msg.filePath, mtime: 0, size: 0 } as any);
+          }
+          break;
+        }
+
         case "applyAllChanges": {
           if (generateLocked) {
             send(ws, {
