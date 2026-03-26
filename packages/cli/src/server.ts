@@ -118,42 +118,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
           break;
         }
 
-        case "updateProperty": {
-          if (!isProjectFilePathSafe(msg.filePath, projectRoot)) {
-            const error = msg.filePath.trim()
-              ? "File path is outside the project root"
-              : "File path could not be resolved for this element";
-            console.warn(`[FrameUp] Rejected property update path: ${msg.filePath}`);
-            send(ws, { type: "updatePropertyComplete", success: false, error });
-            break;
-          }
-          const resolvedPropPath = resolveProjectFilePath(msg.filePath, projectRoot)!;
-          const prevContent = fs.readFileSync(resolvedPropPath, "utf-8");
-          const undoId = randomUUID();
-          try {
-            const newSource = updateClassName(resolvedPropPath, msg.lineNumber, msg.columnNumber, [{
-              tailwindPrefix: msg.tailwindPrefix,
-              tailwindToken: msg.tailwindToken,
-              value: msg.value,
-              relatedPrefixes: msg.relatedPrefixes,
-              classPattern: msg.classPattern,
-              standalone: msg.standalone,
-            }]);
-            fs.writeFileSync(resolvedPropPath, newSource, "utf-8");
-            undoStack.push({ id: undoId, filePath: resolvedPropPath, content: prevContent, afterContent: newSource, timestamp: Date.now() });
-            send(ws, { type: "updatePropertyComplete", success: true, undoId });
-          } catch (err) {
-            const errorCode = extractErrorCode(err);
-            send(ws, {
-              type: "updatePropertyComplete",
-              success: false,
-              error: err instanceof Error ? err.message : String(err),
-              errorCode,
-            });
-          }
-          break;
-        }
-
+        case "updateProperty":
         case "updateProperties": {
           if (!isProjectFilePathSafe(msg.filePath, projectRoot)) {
             const error = msg.filePath.trim()
@@ -163,30 +128,59 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             send(ws, { type: "updatePropertyComplete", success: false, error });
             break;
           }
-          const resolvedPropsPath = resolveProjectFilePath(msg.filePath, projectRoot)!;
-          const prevContent = fs.readFileSync(resolvedPropsPath, "utf-8");
-          const undoId = randomUUID();
-          try {
-            const newSource = updateClassName(
-              resolvedPropsPath, msg.lineNumber, msg.columnNumber,
-              msg.updates.map((u: { tailwindPrefix: string; tailwindToken: string | null; value: string; relatedPrefixes?: string[]; classPattern?: string; standalone?: boolean }) => ({
+
+          // Build updates array from either single or batch message
+          const updates = msg.type === "updateProperty"
+            ? [{
+                tailwindPrefix: msg.tailwindPrefix,
+                tailwindToken: msg.tailwindToken,
+                value: msg.value,
+                relatedPrefixes: msg.relatedPrefixes,
+                classPattern: msg.classPattern,
+                standalone: msg.standalone,
+              }]
+            : msg.updates.map((u: any) => ({
                 tailwindPrefix: u.tailwindPrefix,
                 tailwindToken: u.tailwindToken,
                 value: u.value,
                 relatedPrefixes: u.relatedPrefixes,
                 classPattern: u.classPattern,
                 standalone: u.standalone,
-              }))
-            );
-            fs.writeFileSync(resolvedPropsPath, newSource, "utf-8");
-            undoStack.push({ id: undoId, filePath: resolvedPropsPath, content: prevContent, afterContent: newSource, timestamp: Date.now() });
+              }));
+
+          // Route through batch engine for the resolution chain (handles React 19 owner stack positions)
+          console.log(`[updateProperty] ${msg.filePath}:${msg.lineNumber} tag=${(msg as any).tagName} class="${((msg as any).className || "").slice(0, 40)}"`);
+          const batchResult = executeBatch(
+            [{
+              op: "updateClass" as const,
+              file: msg.filePath,
+              line: msg.lineNumber,
+              col: msg.columnNumber,
+              tagName: (msg as any).tagName,
+              className: (msg as any).className,
+              parentTagName: (msg as any).parentTagName,
+              parentClassName: (msg as any).parentClassName,
+              nthOfType: (msg as any).nthOfType,
+              id: (msg as any).elementId,
+              updates,
+            }],
+            projectRoot,
+          );
+
+          const opResult = batchResult.results[0];
+          console.log(`[updateProperty] Result: ${opResult?.success ? "OK" : "FAIL: " + opResult?.error}`);
+          if (opResult?.success) {
+            const undoId = randomUUID();
+            for (const entry of batchResult.undoEntries) {
+              undoStack.push({ id: undoId, filePath: entry.filePath, content: entry.content, afterContent: entry.afterContent, timestamp: Date.now() });
+            }
             send(ws, { type: "updatePropertyComplete", success: true, undoId });
-          } catch (err) {
-            const errorCode = extractErrorCode(err);
+          } else {
+            const errorCode = extractErrorCode(opResult?.error ? new Error(opResult.error) : undefined);
             send(ws, {
               type: "updatePropertyComplete",
               success: false,
-              error: err instanceof Error ? err.message : String(err),
+              error: opResult?.error || "Unknown error",
               errorCode,
             });
           }
@@ -202,38 +196,49 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             send(ws, { type: "updateTextComplete", success: false, error });
             break;
           }
-          const resolvedTextPath = resolveProjectFilePath(msg.filePath, projectRoot)!;
-          const prevContent = fs.readFileSync(resolvedTextPath, "utf-8");
-          const undoId = randomUUID();
-          try {
-            const newSource = updateTextContent(
-              resolvedTextPath,
-              msg.lineNumber,
-              msg.columnNumber,
-              msg.originalText,
-              msg.newText,
-            );
-            if (newSource !== null) {
-              fs.writeFileSync(resolvedTextPath, newSource, "utf-8");
-              undoStack.push({ id: undoId, filePath: resolvedTextPath, content: prevContent, afterContent: newSource, timestamp: Date.now() });
-              send(ws, { type: "updateTextComplete", success: true, undoId });
-            } else {
-              // no-match: no write happened, do not push undo entry
-              send(ws, { type: "updateTextComplete", success: false, reason: "no-match" });
+          // Route through batch engine for the resolution chain
+          const textBatchResult = executeBatch(
+            [{
+              op: "updateText" as const,
+              file: msg.filePath,
+              line: msg.lineNumber,
+              col: msg.columnNumber,
+              tagName: (msg as any).tagName,
+              className: (msg as any).className,
+              parentTagName: (msg as any).parentTagName,
+              parentClassName: (msg as any).parentClassName,
+              nthOfType: (msg as any).nthOfType,
+              id: (msg as any).elementId,
+              originalText: msg.originalText,
+              newText: msg.newText,
+            }],
+            projectRoot,
+          );
+
+          const textResult = textBatchResult.results[0];
+          if (textResult?.success) {
+            const undoId = randomUUID();
+            for (const entry of textBatchResult.undoEntries) {
+              undoStack.push({ id: undoId, filePath: entry.filePath, content: entry.content, afterContent: entry.afterContent, timestamp: Date.now() });
             }
-          } catch (err) {
+            send(ws, { type: "updateTextComplete", success: true, undoId });
+          } else {
+            const reason = textResult?.error?.includes("No matching text") ? "no-match" : undefined;
             send(ws, {
               type: "updateTextComplete",
               success: false,
-              error: err instanceof Error ? err.message : String(err),
+              error: textResult?.error,
+              reason,
             });
           }
           break;
         }
 
         case "commitBatch": {
+          console.log(`[commitBatch] Received ${msg.operations.length} operations:`, msg.operations.map((o: any) => `${o.op}@${o.file}:${o.line}`));
           try {
             const batchResult = executeBatch(msg.operations, projectRoot);
+            console.log(`[commitBatch] Results:`, batchResult.results.map(r => `${r.op}@${r.file}:${r.line} ${r.success ? "OK" : "FAIL: " + r.error}`));
 
             // Create undo entries for each file that was modified
             const batchUndoIds: string[] = [];
@@ -464,6 +469,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             changes: msg.changes,
             apiKey: resolvedKey,
             projectRoot,
+            onProgress: (message) => console.log(`[applyAll] ${message}`),
           })
             .then((result) => {
               const undoIds: string[] = [];

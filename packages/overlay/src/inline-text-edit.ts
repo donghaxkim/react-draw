@@ -2,13 +2,14 @@ import type { ServerMessage, ComponentInfo, ElementIdentity, TextEditAnnotation 
 import { getFiberFromHostInstance, isCompositeFiber, getDisplayName } from "bippy";
 import { getOwnerStack } from "bippy/source";
 import { resolveFrameFilePath } from "./utils/source-resolve.js";
-import { send, onMessage } from "./bridge.js";
+import { send, onMessage, requestFileDiscovery } from "./bridge.js";
+import { getCachedFilePath, setCachedFilePath } from "./file-discovery-cache.js";
 import { COLORS } from "./design-tokens.js";
 import { setInteractionPointerEvents, activateInteraction, getPageElementAtPoint } from "./interaction.js";
 import { getActiveTool } from "./canvas-state.js";
 import { addTextEditAnnotation } from "./canvas-state.js";
-import { isInternalName, isValidElement } from "./utils/component-filter.js";
-import { clearSelection, selectElement } from "./selection.js";
+import { isInternalName, isLibraryPath, isValidElement } from "./utils/component-filter.js";
+import { clearSelection, selectElement, getSelection } from "./selection.js";
 import { addChangeEntry } from "./changelog.js";
 import { addToPending } from "./pending-changes.js";
 import { computeNthOfType } from "./utils/nth-of-type.js";
@@ -157,6 +158,9 @@ async function resolveComponent(el: HTMLElement): Promise<ComponentInfo | null> 
 
         const filePath = resolveFrameFilePath(frame.fileName);
 
+        // Skip library components (framer-motion, react-router, etc.)
+        if (!filePath || isLibraryPath(filePath) || isLibraryPath(frame.fileName || "")) continue;
+
         return {
           tagName: el.tagName.toLowerCase(),
           componentName: name,
@@ -241,14 +245,19 @@ function enterEditMode(element: HTMLElement): void {
   originalInnerHTML = element.innerHTML;
   lastKnownText = originalTextContent;
 
-  // Resolve async — result stored when ready, used at commit time
-  componentInfo = null;
-  resolveComponent(element).then((info) => {
-    // Only store if we're still editing the same element
-    if (editingElement === element) {
-      componentInfo = info;
-    }
-  });
+  // Use the selection system's already-resolved component info (correct for React 19)
+  // Falls back to local resolveComponent only if no selection exists
+  const selectionInfo = getSelection();
+  if (selectionInfo && selectionInfo.filePath) {
+    componentInfo = selectionInfo;
+  } else {
+    componentInfo = null;
+    resolveComponent(element).then((info) => {
+      if (editingElement === element) {
+        componentInfo = info;
+      }
+    });
+  }
 
   savedOutline = element.style.outline;
   element.style.outline = `2px solid ${COLORS.accent}`;
@@ -353,83 +362,47 @@ function commitAndExit(options?: {
   const newText = lastKnownText;
   const changed = newText !== originalTextContent;
 
+  console.log("[FrameUp:textEdit] commitAndExit changed:", changed, "componentInfo:", componentInfo?.componentName, "filePath:", componentInfo?.filePath);
+
   if (changed && componentInfo) {
-    // Path B: API key present + filePath available → add to pending store
-    if (hasApiKey() && componentInfo.filePath) {
-      const el = editingElement;
-      const parentEl = el?.parentElement;
-
-      addToPending({
-        type: "text",
-        componentName: componentInfo.componentName,
-        tag: componentInfo.tagName,
-        filePath: componentInfo.filePath,
-        className: el?.className || "",
-        nthOfType: el ? computeNthOfType(el) : 1,
-        parentTag: parentEl?.tagName.toLowerCase() || "",
-        parentClassName: parentEl?.className || "",
-        lineHint: componentInfo.lineNumber,
-        originalText: originalTextContent,
-        newText,
-      });
-
-      const elementToSelectB = editingElement;
-      exitEditMode();
-      if (options?.nextSelection && document.contains(options.nextSelection)) {
-        selectElement(options.nextSelection, { skipSidebar: false });
-        return;
+    // If filePath is empty, try file discovery (grep-based lookup by component name)
+    if (!componentInfo.filePath && componentInfo.componentName) {
+      const cached = getCachedFilePath(componentInfo.componentName);
+      if (cached) {
+        componentInfo = { ...componentInfo, filePath: cached };
+      } else {
+        // Fire async discovery — won't block, annotation created with empty path for now
+        requestFileDiscovery(componentInfo.componentName).then((discovered) => {
+          if (discovered) setCachedFilePath(componentInfo!.componentName, discovered);
+        });
       }
-      if (options?.clearSelection) {
-        clearSelection();
-        return;
-      }
-      if (options?.reselectEditedElement === false) {
-        return;
-      }
-      if (elementToSelectB && document.contains(elementToSelectB)) {
-        selectElement(elementToSelectB, { skipSidebar: false });
-      }
-      return;
     }
 
-    if (componentInfo.filePath) {
-      // Path A: AST write — we have source location info
-      pendingCommit = {
-        componentInfo,
-        originalText: originalTextContent,
-        newText,
-        originalInnerHTML,
-        tagName: componentInfo.tagName,
-      };
-
-      send({
-        type: "updateText",
-        filePath: componentInfo.filePath,
-        lineNumber: componentInfo.lineNumber,
-        columnNumber: componentInfo.columnNumber,
-        originalText: originalTextContent,
-        newText,
-      });
-    } else {
-      // Path B-2: No source location — go directly to annotation fallback
+    // All text edits create annotations — committed via confirm button
+    {
       const ann: TextEditAnnotation = {
         type: "textEdit",
         id: `text-edit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         componentName: componentInfo.componentName,
-        filePath: "",
-        lineNumber: 0,
-        columnNumber: 0,
+        filePath: componentInfo.filePath || "",
+        lineNumber: componentInfo.lineNumber || 0,
+        columnNumber: componentInfo.columnNumber || 0,
         originalText: originalTextContent,
         newText,
       };
       const identity: ElementIdentity = {
         componentName: componentInfo.componentName,
-        filePath: "",
-        lineNumber: 0,
-        columnNumber: 0,
+        filePath: componentInfo.filePath || "",
+        lineNumber: componentInfo.lineNumber || 0,
+        columnNumber: componentInfo.columnNumber || 0,
         tagName: componentInfo.tagName,
       };
-      addTextEditAnnotation(ann, identity, originalInnerHTML);
+      addTextEditAnnotation(ann, identity, originalInnerHTML, {
+        tagName: editingElement?.tagName.toLowerCase() || componentInfo.tagName,
+        className: editingElement?.className || undefined,
+        parentTagName: editingElement?.parentElement?.tagName.toLowerCase(),
+        parentClassName: editingElement?.parentElement?.className || undefined,
+      });
       addChangeEntry({
         type: "textAnnotation",
         componentName: ann.componentName,

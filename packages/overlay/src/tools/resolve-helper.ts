@@ -3,7 +3,7 @@ import type { ComponentRef } from "@frameup/shared";
 import { getFiberFromHostInstance, isCompositeFiber, getDisplayName } from "bippy";
 import { getOwnerStack } from "bippy/source";
 import { resolveFrameFilePath } from "../utils/source-resolve.js";
-import { isInternalName } from "../utils/component-filter.js";
+import { isInternalName, isLibraryPath } from "../utils/component-filter.js";
 import { getPageElementAtPoint } from "../interaction.js";
 import { getCachedFilePath, setCachedFilePath } from "../file-discovery-cache.js";
 import { requestFileDiscovery } from "../bridge.js";
@@ -33,6 +33,7 @@ export async function resolveComponentAtPoint(clientX: number, clientY: number):
         if (isInternalName(name)) continue;
 
         const filePath = resolveFrameFilePath(frame.fileName);
+        if (!filePath || isLibraryPath(filePath) || isLibraryPath(frame.fileName || "")) continue;
 
         result = {
           componentName: name,
@@ -105,6 +106,7 @@ export async function resolveComponentFromElement(el: HTMLElement): Promise<Comp
         if (isInternalName(name)) continue;
 
         const filePath = resolveFrameFilePath(frame.fileName);
+        if (!filePath || isLibraryPath(filePath) || isLibraryPath(frame.fileName || "")) continue;
 
         result = {
           componentName: name,

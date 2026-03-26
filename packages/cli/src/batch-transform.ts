@@ -57,6 +57,19 @@ function getJSXTagName(node: any): string | null {
   return null;
 }
 
+/**
+ * Check if an AST tag name matches a DOM tag name.
+ * Handles motion.div → div, Styled.button → button, etc.
+ */
+function tagNameMatches(astTag: string, domTag: string): boolean {
+  if (astTag.toLowerCase() === domTag.toLowerCase()) return true;
+  if (astTag.includes(".")) {
+    const suffix = astTag.split(".").pop()!;
+    if (suffix.toLowerCase() === domTag.toLowerCase()) return true;
+  }
+  return false;
+}
+
 /** Extract static classes from a JSX element's className attribute. */
 function getJSXStaticClasses(node: any): string[] {
   const attrs = node.openingElement?.attributes ?? [];
@@ -68,6 +81,29 @@ function getJSXStaticClasses(node: any): string[] {
   // Handle both StringLiteral (tsx parser) and Literal (babel parser)
   if (val.type === "StringLiteral" || val.type === "Literal") {
     return (val.value ?? "").split(/\s+/).filter(Boolean);
+  }
+  // JSXExpressionContainer — extract static parts from template literals and cn()/clsx() calls
+  if (val.type === "JSXExpressionContainer") {
+    const expr = val.expression;
+    // Template literal: className={`flex gap-4 ${dynamic}`} — extract from quasis
+    if (expr.type === "TemplateLiteral") {
+      const classes: string[] = [];
+      for (const quasi of expr.quasis ?? []) {
+        const raw = quasi.value?.raw ?? "";
+        classes.push(...raw.split(/\s+/).filter(Boolean));
+      }
+      return classes;
+    }
+    // Call expression: className={cn("flex gap-4", ...)} — extract from string args
+    if (expr.type === "CallExpression") {
+      const classes: string[] = [];
+      for (const arg of expr.arguments ?? []) {
+        if (arg.type === "StringLiteral" || arg.type === "Literal") {
+          classes.push(...(arg.value ?? "").split(/\s+/).filter(Boolean));
+        }
+      }
+      return classes;
+    }
   }
   return [];
 }
@@ -123,6 +159,19 @@ function computeASTNthOfType(astPath: any): number {
   return count;
 }
 
+/** Check if a JSX element's text content (recursive) contains the given text. */
+function containsText(node: any, text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const children = node.children;
+  if (!children) return false;
+  for (const child of children) {
+    if (child.type === "JSXText" && child.value.trim().includes(trimmed)) return true;
+    if (child.type === "JSXElement" && containsText(child, text)) return true;
+  }
+  return false;
+}
+
 // ── Node resolution ──────────────────────────────────────────────────────
 
 function resolveNodes(
@@ -150,8 +199,9 @@ function resolveNodes(
       try {
         const stat = fs.statSync(resolvedPath);
         const currentMtime = Math.floor(stat.mtimeMs);
+        const expectedMtime = Math.floor(op.fileMtime);
         const currentSize = stat.size;
-        if (currentMtime !== op.fileMtime || currentSize !== op.fileSize) {
+        if (currentMtime !== expectedMtime || currentSize !== op.fileSize) {
           resolved.push({
             index,
             op,
@@ -173,7 +223,7 @@ function resolveNodes(
     // Cross-validate tag name if we got a hit and hint is available
     if (node && op.tagName) {
       const actualTag = getJSXTagName(node.node);
-      if (actualTag && actualTag !== op.tagName) {
+      if (actualTag && !tagNameMatches(actualTag, op.tagName)) {
         // Exact position hit wrong tag — clear and fall through
         node = null;
       }
@@ -183,13 +233,16 @@ function resolveNodes(
     if (!node && op.tagName) {
       const candidates: any[] = [];
       root.find(j.JSXElement).forEach((p: any) => {
-        if (getJSXTagName(p.node) === op.tagName) {
+        const astTag = getJSXTagName(p.node);
+        if (astTag && op.tagName && tagNameMatches(astTag, op.tagName)) {
           candidates.push(p);
         }
       });
 
+      // Log candidates for debugging
+      console.log(`[resolve] ${candidates.length} <${op.tagName}> candidates, DOM className="${op.className?.slice(0, 60) ?? ""}"`);
+
       if (candidates.length === 1) {
-        // Only one element with that tag name — use it
         node = candidates[0];
       } else if (candidates.length > 1) {
         // ── Disambiguate ───────────────────────────────────────────
@@ -206,18 +259,79 @@ function resolveNodes(
           if (byKey.length === 1) node = byKey[0];
         }
 
-        // B3: Filter by className subset match
-        if (!node && op.className) {
-          const byClass = candidates.filter((p: any) => {
-            const astClasses = getJSXStaticClasses(p.node);
-            return classNameSubsetMatch(astClasses, op.className!);
+        // B2.5: For updateText ops, filter candidates by text content match
+        if (!node && op.op === "updateText") {
+          const textOp = op as Extract<BatchOperation, { op: "updateText" }>;
+          const textCandidates = candidates.filter(c => {
+            return containsText(c.node, textOp.originalText);
           });
-          if (byClass.length === 1) {
-            node = byClass[0];
-          } else if (byClass.length > 1 && op.nthOfType != null) {
-            // B4: Among className matches, disambiguate by nthOfType
-            const match = byClass.find((p: any) => computeASTNthOfType(p) === op.nthOfType);
-            if (match) node = match;
+          if (textCandidates.length === 1) {
+            node = textCandidates[0];
+            const loc = node.node.openingElement?.loc?.start;
+            console.log(`[resolve] Text content match <${op.tagName}> → ${loc?.line}:${loc?.column}`);
+          } else if (textCandidates.length > 1) {
+            // Narrow candidates to those containing the text
+            candidates.length = 0;
+            candidates.push(...textCandidates);
+          }
+        }
+
+        // B3: Filter by className — pick the candidate with the highest class overlap
+        if (!node && op.className) {
+          const domClasses = op.className.split(/\s+/).filter(Boolean);
+          let bestMatch: any = null;
+          let bestOverlap = 0;
+
+          for (const candidate of candidates) {
+            const astClasses = getJSXStaticClasses(candidate.node);
+            if (astClasses.length === 0) continue;
+
+            // Count overlap in both directions
+            const astInDom = astClasses.filter(c => domClasses.includes(c)).length;
+            const domInAst = domClasses.filter(c => astClasses.includes(c)).length;
+            // Overlap = matched classes / max(ast, dom) — rewards both precision and recall
+            const overlap = (astInDom + domInAst) / (astClasses.length + domClasses.length);
+
+            const loc = candidate.node.openingElement?.loc?.start;
+            console.log(`[resolve]   candidate @${loc?.line}: AST="${astClasses.slice(0, 5).join(" ")}" overlap=${overlap.toFixed(2)}`);
+
+            if (overlap > bestOverlap) {
+              bestOverlap = overlap;
+              bestMatch = candidate;
+            }
+          }
+
+          // Require at least 30% overlap to accept
+          if (bestMatch && bestOverlap >= 0.3) {
+            // Check if there's a close second — if so, use nthOfType to disambiguate
+            const secondBest = candidates
+              .filter(c => c !== bestMatch)
+              .reduce((best, c) => {
+                const astClasses = getJSXStaticClasses(c.node);
+                const astInDom = astClasses.filter(cl => domClasses.includes(cl)).length;
+                const domInAst = domClasses.filter(cl => astClasses.includes(cl)).length;
+                const overlap = (astInDom + domInAst) / (astClasses.length + domClasses.length);
+                return overlap > best ? overlap : best;
+              }, 0);
+
+            if (bestOverlap - secondBest > 0.1) {
+              // Clear winner
+              node = bestMatch;
+            } else if (op.nthOfType != null) {
+              // Close match — use nthOfType to break tie
+              const tiedCandidates = candidates.filter(c => {
+                const astClasses = getJSXStaticClasses(c.node);
+                const astInDom = astClasses.filter(cl => domClasses.includes(cl)).length;
+                const domInAst = domClasses.filter(cl => astClasses.includes(cl)).length;
+                const overlap = (astInDom + domInAst) / (astClasses.length + domClasses.length);
+                return overlap >= bestOverlap - 0.1;
+              });
+              const byNth = tiedCandidates.find((p: any) => computeASTNthOfType(p) === op.nthOfType);
+              if (byNth) node = byNth;
+              else node = bestMatch; // fallback to best overlap
+            } else {
+              node = bestMatch;
+            }
           }
         }
 
@@ -324,30 +438,22 @@ function applyOp(j: any, root: any, rop: ResolvedOp): string | undefined {
     }
 
     case "moveSpacing": {
-      const prefix = getMovePrefix(op.axis, op.direction, op.layoutContext);
+      // Detect the right mechanism for this element
+      const mechanism = detectMoveMechanism(node, op.axis);
 
-      // Move-scoped: remove both positive and negative variants before applying
-      const openingElement = node.node.openingElement;
-      const attrs = openingElement?.attributes ?? [];
-      const classNameAttr = attrs.find(
-        (a: any) => a.type === "JSXAttribute" && a.name?.name === "className"
-      );
-      if (classNameAttr?.value) {
-        const val = classNameAttr.value;
-        if (val.type === "StringLiteral" || val.type === "Literal") {
-          const classes = val.value.split(/\s+/).filter(Boolean);
-          val.value = classes.filter((c: string) => {
-            if (c.startsWith(`${prefix}-`) || c === prefix) return false;
-            if (c.startsWith(`-${prefix}-`) || c === `-${prefix}`) return false;
-            return true;
-          }).join(" ");
-        }
+      if (mechanism === "framer-motion") {
+        return applyFramerMotionMove(node, op);
       }
 
+      // Default: CSS translate class
+      const basePrefix = op.axis === "x" ? "translate-x" : "translate-y";
+      const isNegative = op.direction === "negative";
+      const classPattern = `^-?${basePrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(-|$)`;
       const updates: ClassNameUpdate[] = [{
-        tailwindPrefix: prefix,
+        tailwindPrefix: isNegative ? `-${basePrefix}` : basePrefix,
         tailwindToken: op.token,
         value: "",
+        classPattern,
       }];
       mutateClassName(j, node, updates);
       return undefined;
@@ -358,23 +464,93 @@ function applyOp(j: any, root: any, rop: ResolvedOp): string | undefined {
   }
 }
 
+// ── Move mechanism detection ─────────────────────────────────────────────
+
+type MoveMechanism = "framer-motion" | "translate-class";
+
 /**
- * Determine the Tailwind prefix for a move based on axis, direction, and layout context.
+ * Detect which mechanism should be used to apply a move to this element.
+ * - framer-motion: element is motion.* with animate prop that ALREADY contains x or y
+ *   (only if the animate prop already controls position — don't inject position into
+ *   opacity-only or scale-only animations)
+ * - translate-class: default for everything else — stacks on top of inline styles
+ *   without destroying existing values
  */
-function getMovePrefix(
-  axis: "x" | "y",
-  direction: "positive" | "negative",
-  layout: "flex" | "grid" | "block" | "positioned",
-): string {
-  if (layout === "positioned") {
-    // Positioned elements: use top/left/right/bottom
-    if (axis === "x") return direction === "positive" ? "left" : "right";
-    return direction === "positive" ? "top" : "bottom";
+function detectMoveMechanism(nodePath: any, axis: "x" | "y"): MoveMechanism {
+  const node = nodePath.node;
+  const tagName = getJSXTagName(node);
+  const attrs = node.openingElement?.attributes ?? [];
+
+  // Check for framer-motion: tag starts with "motion." and animate prop has x/y
+  if (tagName?.startsWith("motion.")) {
+    const animateProp = attrs.find(
+      (a: any) => a.type === "JSXAttribute" && a.name?.name === "animate"
+    );
+    if (animateProp?.value?.type === "JSXExpressionContainer") {
+      const expr = animateProp.value.expression;
+      if (expr.type === "ObjectExpression") {
+        const propName = axis === "x" ? "x" : "y";
+        const hasAxisProp = expr.properties.some(
+          (p: any) => p.type === "ObjectProperty" && p.key?.name === propName
+        );
+        if (hasAxisProp) return "framer-motion";
+      }
+    }
   }
 
-  // Flow layout (flex, grid, block): use margin
-  if (axis === "x") return direction === "positive" ? "ml" : "mr";
-  return direction === "positive" ? "mt" : "mb";
+  return "translate-class";
+}
+
+/**
+ * Apply move to a framer-motion element by modifying the animate prop's existing x/y value.
+ * Only called when detectMoveMechanism confirmed the animate prop already has the axis prop.
+ */
+function applyFramerMotionMove(nodePath: any, op: Extract<BatchOperation, { op: "moveSpacing" }>): string | undefined {
+  const attrs = nodePath.node.openingElement?.attributes ?? [];
+  const animateProp = attrs.find(
+    (a: any) => a.type === "JSXAttribute" && a.name?.name === "animate"
+  );
+  if (animateProp?.value?.type !== "JSXExpressionContainer") {
+    return "animate prop not found or not an expression";
+  }
+
+  const expr = (animateProp as any).value.expression;
+  if (expr.type !== "ObjectExpression") {
+    return "Cannot modify framer-motion animate prop (not an inline object)";
+  }
+
+  const propName = op.axis === "x" ? "x" : "y";
+  const existingProp = expr.properties.find(
+    (p: any) => p.type === "ObjectProperty" && p.key?.name === propName
+  );
+
+  if (!existingProp) {
+    // Shouldn't happen — detectMoveMechanism verified this exists
+    return `No ${propName} property in animate prop`;
+  }
+
+  // Read current numeric value (handles positive literals and unary negation)
+  const currentValue = existingProp.value?.type === "NumericLiteral"
+    ? existingProp.value.value
+    : (existingProp.value?.type === "UnaryExpression" && existingProp.value.operator === "-"
+      ? -(existingProp.value.argument?.value ?? 0)
+      : 0);
+
+  const newValue = currentValue + op.pxDelta;
+
+  // Write back — use UnaryExpression for negative values to produce "y: -160" not "y: -160"
+  if (newValue < 0) {
+    existingProp.value = {
+      type: "UnaryExpression",
+      operator: "-",
+      prefix: true,
+      argument: { type: "NumericLiteral", value: Math.abs(newValue) },
+    };
+  } else {
+    existingProp.value = { type: "NumericLiteral", value: newValue };
+  }
+
+  return undefined;
 }
 
 // ── Main entry point ─────────────────────────────────────────────────────

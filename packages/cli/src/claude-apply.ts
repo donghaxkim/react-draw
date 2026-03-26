@@ -9,6 +9,7 @@ import {
   validateDiffChange,
   readSourceFiles,
   type UndoFileEntry,
+  type Replacement,
 } from "./claude-shared.js";
 import { resolveProjectFilePath } from "./path-resolver.js";
 
@@ -223,24 +224,32 @@ export async function applyAllChanges(opts: {
   onProgress?.("Applying changes...");
 
   const parsed = parseDiffResponse(responseText);
+
+  if (parsed.length === 0) {
+    onProgress?.("Claude returned no SEARCH/REPLACE blocks");
+    return { success: false, appliedCount: 0, failedCount: changes.length, changes: [], undoEntries: [], error: "Claude returned no applicable changes" };
+  }
+
   let appliedCount = 0;
   let failedCount = 0;
   const appliedChanges: FileChange[] = [];
 
   // Collect all replacements per file FIRST, then write once.
-  const replacementsByFile = new Map<string, { resolvedPath: string; replacements: any[]; descriptions: string[] }>();
+  const replacementsByFile = new Map<string, { resolvedPath: string; replacements: Replacement[]; descriptions: string[] }>();
 
   for (const diff of parsed) {
     const filePath = diff.filePath;
     const resolvedPath = resolveProjectFilePath(filePath, projectRoot) ?? path.resolve(projectRoot, filePath);
     const original = sources.get(filePath);
     if (!original) {
+      onProgress?.(`Source not found for "${filePath}" (have: ${[...sources.keys()].join(", ")})`);
       failedCount++;
       continue;
     }
 
     const validation = validateDiffChange(diff, original, resolvedPath);
     if (validation !== null) {
+      onProgress?.(`Validation failed: ${validation}`);
       failedCount++;
       continue;
     }
@@ -257,6 +266,14 @@ export async function applyAllChanges(opts: {
   for (const [filePath, { resolvedPath, replacements, descriptions }] of replacementsByFile) {
     const original = sources.get(filePath)!;
     const newContent = applyReplacements(original, replacements);
+
+    // Only write if content actually changed
+    if (newContent === original) {
+      onProgress?.(`No actual changes for ${filePath} — SEARCH blocks may not have matched`);
+      failedCount += descriptions.length;
+      continue;
+    }
+
     fs.writeFileSync(resolvedPath, newContent, "utf-8");
 
     const undoEntry = undoEntries.find((u) => u.filePath === resolvedPath);
@@ -267,7 +284,7 @@ export async function applyAllChanges(opts: {
   }
 
   return {
-    success: failedCount === 0,
+    success: failedCount === 0 && appliedCount > 0,
     appliedCount,
     failedCount,
     undoEntries: undoEntries.filter((u) => u.afterContent !== ""),

@@ -133,12 +133,17 @@ export function addAnnotation(ann: Annotation): void {
   notifyStateChange();
 }
 
+/** DOM hints for text edit annotations — used by buildBatchOperations for fuzzy resolution. */
+const textEditDomHints = new Map<string, { tagName: string; className?: string; parentTagName?: string; parentClassName?: string }>();
+
 export function addTextEditAnnotation(
   ann: TextEditAnnotation,
   elementIdentity: ElementIdentity,
   originalInnerHTML: string,
+  domHints?: { tagName: string; className?: string; parentTagName?: string; parentClassName?: string },
 ): void {
   annotations.push(ann);
+  if (domHints) textEditDomHints.set(ann.id, domHints);
   undoStack.push({
     type: "textEditRestore",
     annotationId: ann.id,
@@ -326,6 +331,8 @@ export function resetCanvas(): void {
   moves = new Map();
   annotations = [];
   undoStack = [];
+  pendingPropertyOps = [];
+  textEditDomHints.clear();
   originalsHidden = true;
   canvasScale = 1;
   canvasOffsetX = 0;
@@ -429,13 +436,18 @@ export function buildBatchOperations(): BatchOperation[] {
     // Text edits → updateText
     if (ann.type === "textEdit") {
       const textAnn = ann as TextEditAnnotation;
-      if (textAnn.filePath) { // Only if we have a file path
+      if (textAnn.filePath) {
+        const hints = textEditDomHints.get(textAnn.id);
         ops.push({
           op: "updateText",
           file: textAnn.filePath,
           line: textAnn.lineNumber,
           col: textAnn.columnNumber,
           componentName: textAnn.componentName,
+          tagName: hints?.tagName,
+          className: hints?.className,
+          parentTagName: hints?.parentTagName,
+          parentClassName: hints?.parentClassName,
           originalText: textAnn.originalText,
           newText: textAnn.newText,
         });

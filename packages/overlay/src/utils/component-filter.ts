@@ -18,6 +18,16 @@ const INTERNAL_NAMES = new Set([
   "Suspense", "Fragment", "StrictMode",
   // Next.js RSC internals
   "ReplaySsrOnlyErrors", "SegmentViewNode", "SegmentTrieNode",
+  // Framer Motion internals
+  "MotionDOMComponent", "MotionComponent", "AnimatePresence",
+  // React Router internals
+  "RenderedRoute", "RenderErrorBoundary", "Outlet",
+  // Styled-components / Emotion internals
+  "StyledComponent", "EmotionCssPropInternal",
+  // Radix UI internals
+  "Primitive", "Slot",
+  // MUI internals
+  "Transition", "TransitionGroup",
 ]);
 
 export function isInternalName(name: string): boolean {
@@ -25,7 +35,29 @@ export function isInternalName(name: string): boolean {
   if (name.startsWith("_") || name.startsWith("$")) return true;
   if (name.includes("Provider") || name.includes("Context")) return true;
   if (name === "Head" || name === "html" || name === "body") return true;
+  // Catch library internals by fileName pattern — if the resolved component
+  // points to node_modules or a dist folder, it's not user code
   return false;
+}
+
+/**
+ * Check if a resolved file path points to library code (not user source).
+ * Used as an additional filter when isInternalName doesn't catch a wrapper component.
+ */
+export function isLibraryPath(filePath: string): boolean {
+  if (!filePath) return false;
+  return (
+    filePath.includes("node_modules") ||
+    filePath.includes("/dist/") ||
+    filePath.includes("/build/") ||
+    filePath.startsWith("../") ||
+    filePath.includes("framer-motion") ||
+    filePath.includes("react-router") ||
+    filePath.includes("@radix-ui") ||
+    filePath.includes("@mui") ||
+    filePath.includes("@emotion") ||
+    filePath.includes("styled-components")
+  );
 }
 
 /** Returns true if the element is effectively the whole page and should not be selectable. */

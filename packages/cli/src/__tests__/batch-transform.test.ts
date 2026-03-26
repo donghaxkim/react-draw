@@ -202,7 +202,7 @@ describe("executeBatch", () => {
 
   // ── moveSpacing operation ────────────────────────────────────────────
 
-  it("applies moveSpacing by adding margin class", () => {
+  it("applies moveSpacing by adding translate class", () => {
     const { filePath, original } = setup("classname-string.tsx");
     const h2Pos = findPosition(original, "h2");
 
@@ -215,23 +215,23 @@ describe("executeBatch", () => {
     expect(result.results[0].success).toBe(true);
 
     const updated = fs.readFileSync(filePath, "utf-8");
-    expect(updated).toContain("mt-4");
+    expect(updated).toContain("translate-y-4");
   });
 
-  it("applies moveSpacing with positioned context using top/left", () => {
+  it("applies moveSpacing with negative direction using negative translate", () => {
     const { filePath, original } = setup("classname-string.tsx");
     const h2Pos = findPosition(original, "h2");
 
     const result = executeBatch(
       [{ op: "moveSpacing", file: filePath, line: h2Pos.line, col: h2Pos.col,
-         axis: "x", token: "8", direction: "positive", layoutContext: "positioned" }],
+         axis: "x", token: "8", direction: "negative", layoutContext: "positioned" }],
       path.dirname(filePath),
     );
 
     expect(result.results[0].success).toBe(true);
 
     const updated = fs.readFileSync(filePath, "utf-8");
-    expect(updated).toContain("left-8");
+    expect(updated).toContain("-translate-x-8");
   });
 
   // ── Error handling ───────────────────────────────────────────────────

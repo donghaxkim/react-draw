@@ -5,7 +5,8 @@ import { renderSections, isGroupCollapsed, onSectionExpand } from "./section-ren
 import { createSidebar } from "./property-sidebar.js";
 import { getTokenMap, resolveTokenForValue } from "./tailwind-resolver.js";
 import type { MergedTokenMap } from "./tailwind-resolver.js";
-import { send, onCommitResult, onMessage } from "../bridge.js";
+import { send, onCommitResult, onMessage, requestFileDiscovery } from "../bridge.js";
+import { getCachedFilePath, setCachedFilePath } from "../file-discovery-cache.js";
 import { addChangeEntry } from "../changelog.js";
 import { showToast } from "../toolbar.js";
 import type { PropertyControl } from "./controls/types.js";
@@ -466,12 +467,6 @@ function addPendingFromCurrentState(): void {
  * Batches multiple calls within COMMIT_DEBOUNCE_MS into a single commit.
  */
 export function scheduledCommit(): void {
-  // Path B: API key present → batch, don't write immediately
-  if (hasApiKey()) {
-    addPendingFromCurrentState();
-    return;
-  }
-  // Path A: no API key → existing immediate write behavior
   if (commitTimer) clearTimeout(commitTimer);
   commitTimer = setTimeout(() => {
     commitTimer = null;
@@ -626,6 +621,24 @@ export function inspect(element: HTMLElement, info: ComponentInfo): void {
   state.readOnly = false; // Reset — previous selection may have been read-only
   state.selectedElement = element;
   state.componentInfo = info;
+
+  // If filePath is empty (React 19), try file discovery by component name
+  if (!info.filePath && info.componentName) {
+    const cached = getCachedFilePath(info.componentName);
+    if (cached) {
+      state.componentInfo = { ...info, filePath: cached };
+    } else {
+      requestFileDiscovery(info.componentName).then((discovered) => {
+        if (discovered) {
+          setCachedFilePath(info.componentName, discovered);
+          if (state.componentInfo?.componentName === info.componentName) {
+            state.componentInfo = { ...state.componentInfo, filePath: discovered };
+          }
+        }
+      });
+    }
+  }
+
   state.elementIdentity = {
     componentName: info.componentName,
     filePath: info.filePath,
@@ -761,66 +774,55 @@ export function commit(): void {
   if (state.pendingBatch.size === 0) return;
   if (!state.componentInfo) return;
 
-  const filePath = state.componentInfo.filePath;
-  if (!filePath) {
-    state.pendingBatch.clear();
-    if (sidebar) {
-      sidebar.hideSaving();
-      sidebar.showWarning("This element can be inspected, but its source file couldn't be resolved", "Dismiss", () => sidebar.clearWarning());
-    }
-    showToast("Can't save changes for this element");
-    return;
-  }
+  const filePath = state.componentInfo.filePath || "";
   const lineNumber = state.componentInfo.lineNumber;
-  const columnNumber = state.componentInfo.columnNumber - 1; // Convert 1-indexed to 0-indexed
+  const columnNumber = state.componentInfo.columnNumber - 1;
+  const el = state.selectedElement;
 
-  // Save snapshot before send — onCommitResult fires before onMessage, clearing inflightCommit
-  lastCommitSnapshot = {
-    componentInfo: { ...state.componentInfo },
-    batch: [...state.pendingBatch.values()].map((u) => ({
-      cssProperty: u.cssProperty,
-      originalValue: u.originalValue,
+  // Build the batch operation with identity hints for React 19 resolution
+  const updates = [...state.pendingBatch.values()].map(u => {
+    const desc = DESCRIPTOR_MAP.get(u.property);
+    return {
+      tailwindPrefix: u.tailwindPrefix,
+      tailwindToken: u.tailwindToken,
       value: u.value,
-    })),
-  };
-
-  if (state.pendingBatch.size === 1) {
-    const update = [...state.pendingBatch.values()][0];
-    const desc = DESCRIPTOR_MAP.get(update.property);
-    send({
-      type: "updateProperty",
-      filePath,
-      lineNumber,
-      columnNumber,
-      ...update,
-      framework: "tailwind",
+      relatedPrefixes: u.relatedPrefixes,
       classPattern: desc?.classPattern,
       standalone: desc?.standalone,
-    });
-  } else {
-    send({
-      type: "updateProperties",
-      filePath,
-      lineNumber,
-      columnNumber,
-      updates: [...state.pendingBatch.values()].map(u => {
-        const desc = DESCRIPTOR_MAP.get(u.property);
-        return {
-          ...u,
-          classPattern: desc?.classPattern,
-          standalone: desc?.standalone,
-        };
-      }),
-      framework: "tailwind",
-    });
-  }
+    };
+  });
+
+  addPendingPropertyOp({
+    op: "updateClass" as const,
+    file: filePath,
+    line: lineNumber,
+    col: columnNumber,
+    tagName: el?.tagName.toLowerCase(),
+    className: el?.className || undefined,
+    parentTagName: el?.parentElement?.tagName.toLowerCase(),
+    parentClassName: el?.parentElement?.className || undefined,
+    nthOfType: (() => {
+      if (!el) return 0;
+      const parent = el.parentElement;
+      if (!parent) return 0;
+      const tag = el.tagName;
+      let count = 0;
+      for (const child of Array.from(parent.children)) {
+        if (child === el) break;
+        if (child.tagName === tag) count++;
+      }
+      return count;
+    })(),
+    id: el?.id || undefined,
+    updates,
+  });
 
   // Push to canvas undo stack
-  if (state.selectedElement && state.elementIdentity) {
+  if (el && state.elementIdentity) {
     pushUndoAction({
       type: "propertyChange",
       elementIdentity: state.elementIdentity,
-      element: state.selectedElement,
+      element: el,
       overrides: [...state.pendingBatch.values()].map(u => ({
         cssProperty: u.cssProperty,
         previousValue: u.originalValue,
@@ -829,31 +831,11 @@ export function commit(): void {
     } as PropertyChangeRuntime);
   }
 
-  // Show saving indicator
-  if (sidebar) sidebar.showSaving();
-
-  // Save previous originals so we can revert on failure
-  const previousOriginals = new Map<string, string>();
-  for (const [key] of state.pendingBatch) {
-    previousOriginals.set(key, state.originalValues.get(key) || "");
-  }
-
-  // Optimistically update originalValues to new values
+  // Update originalValues so next change is relative to this one
   for (const [key, update] of state.pendingBatch) {
     state.originalValues.set(key, update.value);
   }
 
-  // Track in-flight commit for potential revert on failure
-  const batchSnapshot = new Map(state.pendingBatch);
-  const timeoutId = setTimeout(() => {
-    // No response within timeout — assume success and clear
-    if (inflightCommit && inflightCommit.batch === batchSnapshot) {
-      inflightCommit = null;
-      if (sidebar) sidebar.hideSaving();
-    }
-  }, COMMIT_RESULT_TIMEOUT_MS);
-
-  inflightCommit = { batch: batchSnapshot, previousOriginals, timeoutId };
   state.pendingBatch.clear();
 }
 
@@ -904,17 +886,6 @@ export function deselect(): void {
  * Used when clicking outside the sidebar (click-away = confirm).
  */
 export function commitAndDeselect(): void {
-  if (hasApiKey()) {
-    addPendingFromCurrentState();
-    observer.disconnect();
-    destroyControls();
-    if (sidebar) {
-      sidebar.hide();
-    }
-    resetState();
-    return;
-  }
-  // Path A: existing immediate behavior
   if (commitTimer) { clearTimeout(commitTimer); commitTimer = null; }
   observer.disconnect();
   commit();

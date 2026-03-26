@@ -314,6 +314,10 @@ function handleMouseDown(e: MouseEvent): void {
   if (e.metaKey || e.ctrlKey) return;
 
   // Ignore clicks on the overlay's own UI (sidebar, toolbar, etc.)
+  // composedPath() pierces Shadow DOM boundaries
+  const path = e.composedPath();
+  if (path.some((el) => el instanceof HTMLElement && el.id === "frameup-root")) return;
+
   const el = getCanonicalSelectableElement(e.clientX, e.clientY);
 
   // Check if clicking on a resize corner handle (works for both single and multi-select)

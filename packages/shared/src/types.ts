@@ -136,6 +136,7 @@ export type BatchOperation =
       fileSize?: number;
       axis: "x" | "y";
       token: string;
+      pxDelta: number;
       direction: "positive" | "negative";
       layoutContext: "flex" | "grid" | "block" | "positioned";
     };

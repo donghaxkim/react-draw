@@ -427,7 +427,8 @@ export function mutateClassName(j: any, target: any, updates: ClassNameUpdate[])
 
   const attrValue = classNameAttr.value;
 
-  if (attrValue.type === "StringLiteral") {
+  // Handle both StringLiteral (jscodeshift tsx parser) and Literal (babel parser)
+  if (attrValue.type === "StringLiteral" || attrValue.type === "Literal") {
     attrValue.value = updateClassString(attrValue.value, updates);
     return;
   }
@@ -436,6 +437,7 @@ export function mutateClassName(j: any, target: any, updates: ClassNameUpdate[])
     const expr = attrValue.expression;
 
     if (expr.type === "TemplateLiteral") {
+      let anyQuasiMatched = false;
       for (const quasi of expr.quasis) {
         const raw = quasi.value.raw;
         const classes = raw.split(/\s+/).filter(Boolean);
@@ -447,13 +449,17 @@ export function mutateClassName(j: any, target: any, updates: ClassNameUpdate[])
             update.tailwindPrefix,
             ...(update.relatedPrefixes ?? []),
           ];
-          if (classes.some((c: string) => allPrefixes.some((p) => classMatchesPrefix(c, p)))) {
+          if (classes.some((c: string) =>
+            allPrefixes.some((p) => classMatchesPrefix(c, p)) ||
+            (update.classPattern && new RegExp(update.classPattern).test(c))
+          )) {
             hasMatch = true;
             break;
           }
         }
 
         if (hasMatch) {
+          anyQuasiMatched = true;
           const leadingWs = raw.match(/^(\s*)/)?.[1] ?? "";
           const trailingWs = raw.match(/(\s*)$/)?.[1] ?? "";
           const updated = updateClassString(raw.trim(), updates);
@@ -462,6 +468,18 @@ export function mutateClassName(j: any, target: any, updates: ClassNameUpdate[])
             cooked: `${leadingWs}${updated}${trailingWs}`,
           };
         }
+      }
+      // If no quasi had a matching class, append to the LAST quasi (tail)
+      // so our class comes AFTER any dynamic interpolations and wins in Tailwind specificity
+      if (!anyQuasiMatched) {
+        const lastQuasi = expr.quasis[expr.quasis.length - 1];
+        const raw = lastQuasi.value.raw;
+        const newClasses = updates.map(buildClass).join(" ");
+        // Append with a leading space
+        const updated = raw.trimEnd().length > 0
+          ? `${raw.trimEnd()} ${newClasses}`
+          : ` ${newClasses}`;
+        lastQuasi.value = { raw: updated, cooked: updated };
       }
       return;
     }
@@ -539,11 +557,21 @@ export function updateClassName(
  * Replace text content of a JSX element node.
  * Mutates the AST in place — no I/O.
  * Returns true if a matching text child was found and replaced.
+ *
+ * Handles three cases:
+ * 1. Exact match: originalText matches a single JSXText child exactly
+ * 2. Substring diff: originalText is the full concatenated textContent (includes child elements),
+ *    we diff against newText to find what changed, then replace in the matching JSXText fragment
+ * 3. Expression match: text is in a JSXExpressionContainer StringLiteral
  */
 export function mutateTextContent(target: any, originalText: string, newText: string): boolean {
   const children = target.node.children;
+  const tag = target.node.openingElement?.name?.name || target.node.openingElement?.name?.property?.name || "?";
+  const line = target.node.openingElement?.loc?.start?.line;
+  console.log(`[mutateText] target=<${tag}> line=${line} children=${children?.length ?? "null"} original="${originalText.slice(0,30)}" new="${newText.slice(0,30)}"`);
   if (!children) return false;
 
+  // Case 1: Exact match against a single JSXText child
   for (let i = 0; i < children.length; i++) {
     const child = children[i];
     if (child.type === "JSXText") {
@@ -566,7 +594,140 @@ export function mutateTextContent(target: any, originalText: string, newText: st
     }
   }
 
+  // Case 2: originalText is concatenated textContent from DOM (includes child element text).
+  // Diff originalText vs newText to find the changed substring, then search ALL JSXText nodes
+  // recursively (the changed text might be inside a <strong>, <em>, <a>, etc.)
+  const diffResult = findTextDiff(originalText.trim(), newText.trim());
+  console.log("[mutateText] diff:", diffResult ? `old="${diffResult.oldSubstring.slice(0,30)}" new="${diffResult.newSubstring.slice(0,30)}" prefix=${diffResult.prefixLen}` : "null");
+  if (diffResult) {
+    if (diffResult.oldSubstring) {
+      // Replace or delete
+      const found = replaceInJSXTextRecursive(target.node, diffResult.oldSubstring, diffResult.newSubstring);
+      if (found) return true;
+    } else if (diffResult.newSubstring && diffResult.prefixLen > 0) {
+      // Pure insertion — find the JSXText child that contains the character at prefixLen,
+      // then insert the new text at the right position within that child
+      const found = insertInJSXTextAtOffset(target.node, diffResult.prefixLen, diffResult.newSubstring, originalText.trim());
+      if (found) return true;
+    } else if (diffResult.newSubstring) {
+      // Insertion at the very start — prepend to the first JSXText child
+      const firstText = findFirstJSXText(target.node);
+      if (firstText) {
+        const ws = firstText.value.match(/^(\s*)/)?.[1] ?? "";
+        firstText.value = ws + diffResult.newSubstring + firstText.value.slice(ws.length);
+        return true;
+      }
+    }
+  }
+
   return false;
+}
+
+/**
+ * Recursively search JSXText nodes in an AST subtree for a substring and replace it.
+ */
+function replaceInJSXTextRecursive(node: any, oldSub: string, newSub: string, depth = 0): boolean {
+  const children = node.children;
+  if (!children) return false;
+
+  for (const child of children) {
+    if (child.type === "JSXText") {
+      const trimmed = child.value.trim();
+      if (child.value.includes(oldSub)) {
+        console.log(`[replaceRecursive] d=${depth} FOUND "${oldSub}" in "${trimmed.slice(0,30)}"`);
+        child.value = child.value.replace(oldSub, newSub);
+        return true;
+      }
+    }
+    if (child.type === "JSXExpressionContainer" && child.expression?.type === "StringLiteral") {
+      if (child.expression.value.includes(oldSub)) {
+        child.expression.value = child.expression.value.replace(oldSub, newSub);
+        return true;
+      }
+    }
+    // Recurse into child JSX elements
+    if (child.type === "JSXElement") {
+      if (replaceInJSXTextRecursive(child, oldSub, newSub, depth + 1)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Find the differing substring between two strings.
+ */
+function findTextDiff(oldText: string, newText: string): { oldSubstring: string; newSubstring: string; prefixLen: number } | null {
+  if (oldText === newText) return null;
+
+  let prefixLen = 0;
+  while (prefixLen < oldText.length && prefixLen < newText.length && oldText[prefixLen] === newText[prefixLen]) {
+    prefixLen++;
+  }
+
+  let oldSuffixStart = oldText.length;
+  let newSuffixStart = newText.length;
+  while (
+    oldSuffixStart > prefixLen &&
+    newSuffixStart > prefixLen &&
+    oldText[oldSuffixStart - 1] === newText[newSuffixStart - 1]
+  ) {
+    oldSuffixStart--;
+    newSuffixStart--;
+  }
+
+  const oldSubstring = oldText.slice(prefixLen, oldSuffixStart);
+  const newSubstring = newText.slice(prefixLen, newSuffixStart);
+
+  if (!oldSubstring && !newSubstring) return null;
+  return { oldSubstring, newSubstring, prefixLen };
+}
+
+/**
+ * Find the first JSXText node in an AST subtree.
+ */
+function findFirstJSXText(node: any): any | null {
+  if (!node.children) return null;
+  for (const child of node.children) {
+    if (child.type === "JSXText" && child.value.trim()) return child;
+    if (child.type === "JSXElement") {
+      const found = findFirstJSXText(child);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+/**
+ * Insert text at a character offset within the concatenated JSXText of a subtree.
+ * Walks through JSXText nodes, tracking cumulative offset, and inserts when found.
+ */
+function insertInJSXTextAtOffset(node: any, offset: number, insertion: string, fullOriginal: string): boolean {
+  // Find which character in the original text is at `offset`, then locate it in the JSXText nodes
+  // Use the character just before the insertion point as an anchor
+  const anchor = fullOriginal.slice(Math.max(0, offset - 10), offset);
+  if (!anchor) return false;
+
+  // Search for the anchor text in JSXText nodes
+  const allTextNodes: any[] = [];
+  collectJSXTextNodes(node, allTextNodes);
+
+  for (const textNode of allTextNodes) {
+    const anchorIdx = textNode.value.indexOf(anchor);
+    if (anchorIdx !== -1) {
+      const insertAt = anchorIdx + anchor.length;
+      textNode.value = textNode.value.slice(0, insertAt) + insertion + textNode.value.slice(insertAt);
+      return true;
+    }
+  }
+  return false;
+}
+
+function collectJSXTextNodes(node: any, result: any[]): void {
+  if (!node.children) return;
+  for (const child of node.children) {
+    if (child.type === "JSXText") result.push(child);
+    if (child.type === "JSXElement") collectJSXTextNodes(child, result);
+  }
 }
 
 /**

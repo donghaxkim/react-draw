@@ -209,11 +209,11 @@ describe("element-resolution: deterministic chain", () => {
 
   // ── 8. moveSpacing: negative margin cleanup ─────────────────────────
 
-  it("cleans negative margin before applying positive", () => {
+  it("cleans existing translate before applying new translate", () => {
     const src = `export default function App() {
-  return <div className="-mt-4 p-2">Content</div>;
+  return <div className="-translate-y-4 p-2">Content</div>;
 }`;
-    const { filePath } = setup("neg-margin.tsx", src);
+    const { filePath } = setup("neg-translate.tsx", src);
     const result = executeBatch(
       [{
         op: "moveSpacing", file: filePath, line: 2, col: 9,
@@ -223,25 +223,25 @@ describe("element-resolution: deterministic chain", () => {
     );
     expect(result.results[0].success).toBe(true);
     const updated = fs.readFileSync(filePath, "utf-8");
-    expect(updated).toContain("mt-8");
-    expect(updated).not.toContain("-mt-4");
+    expect(updated).toContain("translate-y-8");
+    expect(updated).not.toContain("-translate-y-4");
   });
 
-  it("cleans positive margin before applying negative", () => {
+  it("applies negative translate for negative direction", () => {
     const src = `export default function App() {
-  return <div className="mt-4 p-2">Content</div>;
+  return <div className="translate-y-4 p-2">Content</div>;
 }`;
-    const { filePath } = setup("pos-to-neg-margin.tsx", src);
+    const { filePath } = setup("pos-to-neg-translate.tsx", src);
     const result = executeBatch(
       [{
         op: "moveSpacing", file: filePath, line: 2, col: 9,
-        axis: "y", token: "-8", direction: "positive", layoutContext: "block",
+        axis: "y", token: "8", direction: "negative", layoutContext: "block",
       }],
       path.dirname(filePath),
     );
     expect(result.results[0].success).toBe(true);
     const updated = fs.readFileSync(filePath, "utf-8");
-    expect(updated).toContain("mt--8");
-    expect(updated).not.toContain("mt-4");
+    expect(updated).toContain("-translate-y-8");
+    expect(updated).not.toContain("translate-y-4");
   });
 });

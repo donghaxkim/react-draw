@@ -285,6 +285,7 @@ function init(): void {
 
     // Path 1: Deterministic batch operations (colors, text edits, moves)
     const batchOps = buildBatchOperations();
+    console.log("[FrameUp] batchOps:", batchOps.length, batchOps.map(o => `${o.op}@${o.file}`), "hasTextAnns:", hasTextAnnotations());
     if (batchOps.length > 0) {
       generating = true;
       updateGenerateButton(false);
@@ -301,9 +302,9 @@ function init(): void {
       send({ type: "generate", annotations: data });
     }
 
-    // If neither path had work, nothing to do (shouldn't happen due to hasChanges check)
+    // Changes exist but no ops generated (e.g., text edit without resolved filePath)
     if (batchOps.length === 0 && !hasTextAnnotations()) {
-      showToast("Nothing to confirm — make some visual changes first");
+      showToast("Could not resolve source files for these changes — try re-selecting");
     }
   });
 
