@@ -3,7 +3,7 @@
 // the original AST, applies all mutations atomically (parse once, write once).
 
 import * as fs from "node:fs";
-import type { BatchOperation } from "@frameup/shared";
+import type { BatchOperation } from "@react-rewrite/shared";
 import {
   parseSource,
   findJSXElementAt,
@@ -13,6 +13,11 @@ import {
   type ClassNameUpdate,
 } from "./transform.js";
 import { resolveProjectFilePath, isProjectFilePathSafe } from "./path-resolver.js";
+
+/** Get the primary line number from any BatchOperation variant. */
+function getOpLine(op: BatchOperation): number {
+  return op.op === "reorder" ? op.fromLine : op.line;
+}
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -466,8 +471,10 @@ function applyOp(j: any, root: any, rop: ResolvedOp, source: string): string | u
       return undefined;
     }
 
-    default:
-      return `Unknown operation type: ${(op as any).op}`;
+    default: {
+      const _exhaustive: never = op;
+      return `Unknown operation type: ${_exhaustive}`;
+    }
   }
 }
 
@@ -588,7 +595,7 @@ export function executeBatch(
         results[index] = {
           op: op.op,
           file,
-          line: "line" in op ? op.line : (op as any).fromLine,
+          line: getOpLine(op),
           success: false,
           error: "File path is outside the project root",
         };
@@ -602,7 +609,7 @@ export function executeBatch(
         results[index] = {
           op: op.op,
           file,
-          line: "line" in op ? op.line : (op as any).fromLine,
+          line: getOpLine(op),
           success: false,
           error: "Could not resolve file path",
         };
@@ -618,7 +625,7 @@ export function executeBatch(
         results[index] = {
           op: op.op,
           file,
-          line: "line" in op ? op.line : (op as any).fromLine,
+          line: getOpLine(op),
           success: false,
           error: `Failed to read file: ${err instanceof Error ? err.message : String(err)}`,
         };
@@ -640,8 +647,8 @@ export function executeBatch(
       if (a.priority !== b.priority) return a.priority - b.priority;
       // Within same priority, structural ops go bottom-up (highest line first)
       if (a.priority === 1) {
-        const aLine = "fromLine" in a.op ? a.op.fromLine : a.op.line;
-        const bLine = "fromLine" in b.op ? b.op.fromLine : b.op.line;
+        const aLine = getOpLine(a.op);
+        const bLine = getOpLine(b.op);
         return bLine - aLine;
       }
       return 0;
@@ -651,7 +658,7 @@ export function executeBatch(
     let fileHasChanges = false;
 
     for (const rop of coalesced) {
-      const line = "line" in rop.op ? rop.op.line : (rop.op as any).fromLine;
+      const line = getOpLine(rop.op);
 
       if (rop.error) {
         results[rop.index] = { op: rop.op.op, file, line, success: false, error: rop.error };
@@ -685,7 +692,7 @@ export function executeBatch(
         results[i] = {
           op: op.op,
           file,
-          line: "line" in op ? op.line : (op as any).fromLine,
+          line: getOpLine(op),
           success: true,
         };
       }
@@ -700,7 +707,7 @@ export function executeBatch(
       } catch (err) {
         // Serialization/write failed — mark all ops for this file as failed
         for (const { index, op } of ops) {
-          const line = "line" in op ? op.line : (op as any).fromLine;
+          const line = getOpLine(op);
           results[index] = {
             op: op.op,
             file,
