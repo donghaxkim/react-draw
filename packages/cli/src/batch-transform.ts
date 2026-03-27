@@ -13,6 +13,7 @@ import {
   type ClassNameUpdate,
 } from "./transform.js";
 import { resolveProjectFilePath, isProjectFilePathSafe } from "./path-resolver.js";
+import { logger } from "./logger.js";
 
 /** Get the primary line number from any BatchOperation variant. */
 function getOpLine(op: BatchOperation): number {
@@ -252,7 +253,7 @@ function resolveNodes(
       });
 
       // Log candidates for debugging
-      console.log(`[resolve] ${candidates.length} <${op.tagName}> candidates, DOM className="${op.className?.slice(0, 60) ?? ""}"`);
+      logger.debug(`[resolve] ${candidates.length} <${op.tagName}> candidates, DOM className="${op.className?.slice(0, 60) ?? ""}"`);
 
       if (candidates.length === 1) {
         node = candidates[0];
@@ -280,7 +281,7 @@ function resolveNodes(
           if (textCandidates.length === 1) {
             node = textCandidates[0];
             const loc = node.node.openingElement?.loc?.start;
-            console.log(`[resolve] Text content match <${op.tagName}> → ${loc?.line}:${loc?.column}`);
+            logger.debug(`[resolve] Text content match <${op.tagName}> → ${loc?.line}:${loc?.column}`);
           } else if (textCandidates.length > 1) {
             // Narrow candidates to those containing the text
             candidates.length = 0;
@@ -305,7 +306,7 @@ function resolveNodes(
             const overlap = (astInDom + domInAst) / (astClasses.length + domClasses.length);
 
             const loc = candidate.node.openingElement?.loc?.start;
-            console.log(`[resolve]   candidate @${loc?.line}: AST="${astClasses.slice(0, 5).join(" ")}" overlap=${overlap.toFixed(2)}`);
+            logger.debug(`[resolve]   candidate @${loc?.line}: AST="${astClasses.slice(0, 5).join(" ")}" overlap=${overlap.toFixed(2)}`);
 
             if (overlap > bestOverlap) {
               bestOverlap = overlap;

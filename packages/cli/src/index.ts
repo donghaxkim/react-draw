@@ -1,5 +1,4 @@
 // packages/cli/src/index.ts
-import "dotenv/config";
 import { program } from "commander";
 import chalk from "chalk";
 import open from "open";
@@ -7,42 +6,44 @@ import { detect, healthCheck } from "./detect.js";
 import { createProxyServer } from "./inject.js";
 import { createSketchServer } from "./server.js";
 import { getAvailablePort } from "./utils.js";
+import { logger, setLogLevel } from "./logger.js";
 
 program
-  .name("frameup")
+  .name("react-rewrite")
   .description("Visual overlay for React dev servers")
   .argument("[port]", "Dev server port override")
   .option("--no-open", "Don't open browser automatically")
   .option("--host <host>", "Dev server host", "localhost")
-  .option("--api-key <key>", "Anthropic API key (overrides ANTHROPIC_API_KEY env var)")
-  .option("--model <model>", "Claude model to use", "claude-sonnet-4-20250514")
+  .option("--verbose", "Enable debug logging")
   .action(async (portArg?: string) => {
     try {
       const opts = program.opts();
+      if (opts.verbose || process.env.LOG_LEVEL === "debug") {
+        setLogLevel("debug");
+      }
       const host = opts.host || "localhost";
 
-      console.log(chalk.cyan("\n  FrameUp") + chalk.dim(" — React visual overlay\n"));
+      logger.info(chalk.cyan("\n  ReactRewrite") + chalk.dim(" — React visual overlay\n"));
 
       // Detect framework
       const detection = await detect();
       const targetPort = portArg ? parseInt(portArg, 10) : detection.port;
 
-      console.log(
+      logger.info(
         chalk.dim("  Framework: ") + chalk.white(detection.framework)
       );
-      console.log(
+      logger.info(
         chalk.dim("  Dev server: ") +
           chalk.white(`http://${host}:${targetPort}`)
       );
 
       // Health check
-      console.log(chalk.dim("  Checking dev server..."));
+      logger.info(chalk.dim("  Checking dev server..."));
       await healthCheck(targetPort, host);
 
       // Start WebSocket server
       const wsPort = await getAvailablePort(3457);
-      const apiKey = opts.apiKey || process.env.ANTHROPIC_API_KEY;
-      const sketchServer = createSketchServer({ port: wsPort, apiKey, model: opts.model });
+      const sketchServer = createSketchServer({ port: wsPort });
 
       // Start proxy server
       const proxyPort = await getAvailablePort(3456);
@@ -55,23 +56,14 @@ program
       });
 
       proxyServer.listen(proxyPort, () => {
-        console.log(
+        logger.info(
           chalk.dim("  Proxy: ") +
             chalk.green(`http://localhost:${proxyPort}`)
         );
-        console.log(
+        logger.info(
           chalk.dim("  WebSocket: ") + chalk.green(`ws://localhost:${wsPort}`)
         );
-        const modelInfo = opts.model !== "claude-sonnet-4-20250514"
-          ? chalk.dim(`, model: ${opts.model}`)
-          : "";
-        console.log(
-          chalk.dim("  AI Generate: ") +
-            (apiKey
-              ? chalk.green("enabled") + chalk.dim(` (key: ...${apiKey.slice(-6)}${modelInfo})`)
-              : chalk.yellow("disabled") + chalk.dim(" (set ANTHROPIC_API_KEY to enable)"))
-        );
-        console.log(
+        logger.info(
           chalk.dim("\n  Press ") +
             chalk.white("Ctrl+C") +
             chalk.dim(" to stop\n")
@@ -84,7 +76,7 @@ program
 
       // Graceful shutdown
       const shutdown = () => {
-        console.log(chalk.dim("\n  Shutting down...\n"));
+        logger.info(chalk.dim("\n  Shutting down...\n"));
         proxyServer.close();
         sketchServer.close();
         process.exit(0);
@@ -93,7 +85,7 @@ program
       process.on("SIGINT", shutdown);
       process.on("SIGTERM", shutdown);
     } catch (err) {
-      console.error(
+      logger.error(
         chalk.red("\n  Error: ") +
           (err instanceof Error ? err.message : String(err)) +
           "\n"

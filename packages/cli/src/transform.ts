@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import jscodeshift from "jscodeshift";
-import type { SiblingInfo } from "@frameup/shared";
+import type { SiblingInfo } from "@react-rewrite/shared";
 import { detectQuoteStyle } from "./utils.js";
+import { logger } from "./logger.js";
 
 export function getParser(filePath: string): string {
   const ext = path.extname(filePath);
@@ -574,7 +575,7 @@ export function mutateTextContent(
   const children = target.node.children;
   const tag = target.node.openingElement?.name?.name || target.node.openingElement?.name?.property?.name || "?";
   const line = target.node.openingElement?.loc?.start?.line;
-  console.log(`[mutateText] target=<${tag}> line=${line} children=${children?.length ?? "null"} original="${originalText.slice(0,60)}" new="${newText.slice(0,60)}"`);
+  logger.debug(`[mutateText] target=<${tag}> line=${line} children=${children?.length ?? "null"} original="${originalText.slice(0,60)}" new="${newText.slice(0,60)}"`);
   if (!children) return false;
   if (source) {
     materializeBoundarySpaces(target.node, source);
@@ -584,14 +585,14 @@ export function mutateTextContent(
   for (let i = 0; i < children.length; i++) {
     const c = children[i];
     if (c.type === "JSXText") {
-      console.log(`[mutateText]   child[${i}] JSXText: "${c.value.slice(0, 80).replace(/\n/g, "\\n")}"`);
+      logger.debug(`[mutateText]   child[${i}] JSXText: "${c.value.slice(0, 80).replace(/\n/g, "\\n")}"`);
     } else if (c.type === "JSXElement") {
       const childTag = c.openingElement?.name?.name || c.openingElement?.name?.property?.name || "?";
-      console.log(`[mutateText]   child[${i}] JSXElement: <${childTag}>`);
+      logger.debug(`[mutateText]   child[${i}] JSXElement: <${childTag}>`);
     } else if (c.type === "JSXExpressionContainer") {
-      console.log(`[mutateText]   child[${i}] JSXExpr: ${c.expression?.type} = "${String(c.expression?.value ?? c.expression?.type).slice(0, 60)}"`);
+      logger.debug(`[mutateText]   child[${i}] JSXExpr: ${c.expression?.type} = "${String(c.expression?.value ?? c.expression?.type).slice(0, 60)}"`);
     } else {
-      console.log(`[mutateText]   child[${i}] ${c.type}`);
+      logger.debug(`[mutateText]   child[${i}] ${c.type}`);
     }
   }
 
@@ -624,7 +625,7 @@ export function mutateTextContent(
   // Diff originalText vs newText to find the changed substring, then search ALL JSXText nodes
   // recursively (the changed text might be inside a <strong>, <em>, <a>, etc.)
   const diffResult = findTextDiff(originalText, newText);
-  console.log("[mutateText] diff:", diffResult ? `old="${diffResult.oldSubstring.slice(0,30)}" new="${diffResult.newSubstring.slice(0,30)}" prefix=${diffResult.prefixLen}` : "null");
+  logger.debug("[mutateText] diff:", diffResult ? `old="${diffResult.oldSubstring.slice(0,30)}" new="${diffResult.newSubstring.slice(0,30)}" prefix=${diffResult.prefixLen}` : "null");
   if (diffResult) {
     if (diffResult.oldSubstring) {
       const whitespaceSensitive = !/\S/.test(diffResult.oldSubstring) || !/\S/.test(diffResult.newSubstring);
@@ -679,13 +680,13 @@ function replaceInJSXTextRecursive(node: any, oldSub: string, newSub: string, de
       const trimmed = child.value.trim();
       // Try exact match first, then whitespace-flexible match
       if (child.value.includes(oldSub)) {
-        console.log(`[replaceRecursive] d=${depth} FOUND exact "${oldSub.slice(0,30)}" in "${trimmed.slice(0,30)}"`);
+        logger.debug(`[replaceRecursive] d=${depth} FOUND exact "${oldSub.slice(0,30)}" in "${trimmed.slice(0,30)}"`);
         child.value = child.value.replace(oldSub, newSub);
         return true;
       }
       const flexMatch = child.value.match(flexRe);
       if (flexMatch) {
-        console.log(`[replaceRecursive] d=${depth} FOUND flex "${oldSub.slice(0,30)}" in "${trimmed.slice(0,30)}"`);
+        logger.debug(`[replaceRecursive] d=${depth} FOUND flex "${oldSub.slice(0,30)}" in "${trimmed.slice(0,30)}"`);
         child.value = child.value.replace(flexRe, newSub);
         return true;
       }
@@ -1049,7 +1050,7 @@ function replaceCrossElementText(parentNode: any, oldSub: string, newSub: string
 
   if (firstChildIndex === -1 || lastChildIndex === -1) return false;
 
-  console.log(`[crossElement] match spans children[${firstChildIndex}..${lastChildIndex}], replacing "${oldSub.slice(0, 40)}" → "${newSub.slice(0, 40)}"`);
+  logger.debug(`[crossElement] match spans children[${firstChildIndex}..${lastChildIndex}], replacing "${oldSub.slice(0, 40)}" → "${newSub.slice(0, 40)}"`);
   return flattenRangeIntoText(parentNode, firstChildIndex, lastChildIndex, prefix + newSub + suffix);
 }
 

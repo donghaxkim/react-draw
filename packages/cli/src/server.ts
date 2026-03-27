@@ -12,6 +12,7 @@ import type {
 } from "@react-rewrite/shared";
 import { reorderComponent, getSiblings } from "./transform.js";
 import { updateClassName, updateTextContent } from "./transform.js";
+import { logger } from "./logger.js";
 import { resolveTailwindConfig } from "./tailwind-resolver.js";
 import { isProjectFilePathSafe, resolveProjectFilePath } from "./path-resolver.js";
 import { discoverFile } from "./file-discovery.js";
@@ -63,7 +64,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             const error = msg.filePath.trim()
               ? "File path is outside the project root"
               : "File path could not be resolved for this element";
-            console.warn(`[ReactRewrite] Rejected reorder path: ${msg.filePath}`);
+            logger.warn(`[ReactRewrite] Rejected reorder path: ${msg.filePath}`);
             send(ws, { type: "reorderComplete", success: false, error });
             break;
           }
@@ -117,7 +118,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             const error = msg.filePath.trim()
               ? "File path is outside the project root"
               : "File path could not be resolved for this element";
-            console.warn(`[ReactRewrite] Rejected property update path: ${msg.filePath}`);
+            logger.warn(`[ReactRewrite] Rejected property update path: ${msg.filePath}`);
             send(ws, { type: "updatePropertyComplete", success: false, error });
             break;
           }
@@ -142,7 +143,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
               }));
 
           // Route through batch engine for the resolution chain (handles React 19 owner stack positions)
-          console.log(`[updateProperty] ${msg.filePath}:${msg.lineNumber} tag=${msg.tagName} class="${(msg.className || "").slice(0, 40)}"`);
+          logger.debug(`[updateProperty] ${msg.filePath}:${msg.lineNumber} tag=${msg.tagName} class="${(msg.className || "").slice(0, 40)}"`);
           const batchResult = executeBatch(
             [{
               op: "updateClass" as const,
@@ -161,7 +162,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
           );
 
           const opResult = batchResult.results[0];
-          console.log(`[updateProperty] Result: ${opResult?.success ? "OK" : "FAIL: " + opResult?.error}`);
+          logger.debug(`[updateProperty] Result: ${opResult?.success ? "OK" : "FAIL: " + opResult?.error}`);
           if (opResult?.success) {
             const undoId = randomUUID();
             for (const entry of batchResult.undoEntries) {
@@ -185,7 +186,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             const error = msg.filePath.trim()
               ? "File path is outside the project root"
               : "File path could not be resolved for this element";
-            console.warn(`[ReactRewrite] Rejected text update path: ${msg.filePath}`);
+            logger.warn(`[ReactRewrite] Rejected text update path: ${msg.filePath}`);
             send(ws, { type: "updateTextComplete", success: false, error });
             break;
           }
@@ -228,10 +229,10 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
         }
 
         case "commitBatch": {
-          console.log(`[commitBatch] Received ${msg.operations.length} operations:`, msg.operations.map((o) => `${o.op}@${o.file}:${"line" in o ? o.line : o.fromLine}`));
+          logger.debug(`[commitBatch] Received ${msg.operations.length} operations:`, msg.operations.map((o) => `${o.op}@${o.file}:${"line" in o ? o.line : o.fromLine}`));
           try {
             const batchResult = executeBatch(msg.operations, projectRoot);
-            console.log(`[commitBatch] Results:`, batchResult.results.map(r => `${r.op}@${r.file}:${r.line} ${r.success ? "OK" : "FAIL: " + r.error}`));
+            logger.debug(`[commitBatch] Results:`, batchResult.results.map(r => `${r.op}@${r.file}:${r.line} ${r.success ? "OK" : "FAIL: " + r.error}`));
 
             // Create undo entries for each file that was modified
             const batchUndoIds: string[] = [];
@@ -336,7 +337,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
       }
     } catch (err) {
       // Catch-all for unexpected errors
-      console.error("Error processing message:", err);
+      logger.error("Error processing message:", err);
     }
 
     processing = false;
@@ -357,7 +358,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
       resolvedTokens = config.tokens;
       send(ws, { type: "tailwindTokens", tokens: config.tokens });
     } catch (err) {
-      console.warn("[ReactRewrite] Could not resolve Tailwind config:", err);
+      logger.warn("[ReactRewrite] Could not resolve Tailwind config:", err);
     }
 
     ws.on("message", (data) => {
@@ -376,7 +377,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
         case "getSiblings":
           // Can run concurrently (read-only)
           if (!isProjectFilePathSafe(msg.filePath, projectRoot)) {
-            console.warn(`[ReactRewrite] Rejected siblings path: ${msg.filePath}`);
+            logger.warn(`[ReactRewrite] Rejected siblings path: ${msg.filePath}`);
             send(ws, { type: "siblingsList", siblings: [] });
             break;
           }
