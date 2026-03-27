@@ -7,9 +7,27 @@ on:
     branches: [main]
 
 jobs:
-  build-and-test:
+  typecheck:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+  test:
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         node-version: [20, 22]
@@ -19,7 +37,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 10.32
+          version: 10
 
       - uses: actions/setup-node@v4
         with:
@@ -31,7 +49,8 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Test
-        run: |
-          pnpm test
-          pnpm --filter @react-rewrite/overlay exec vitest run
+      - name: Test (CLI)
+        run: pnpm test
+
+      - name: Test (Overlay)
+        run: pnpm --filter @react-rewrite/overlay exec vitest run
