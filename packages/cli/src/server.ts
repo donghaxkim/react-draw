@@ -9,20 +9,16 @@ import type {
   UndoEntry,
   TransformErrorCode,
   TailwindTokenMap,
-} from "@frameup/shared";
+} from "@react-rewrite/shared";
 import { reorderComponent, getSiblings } from "./transform.js";
 import { updateClassName, updateTextContent } from "./transform.js";
 import { resolveTailwindConfig } from "./tailwind-resolver.js";
-import { generate } from "./generate.js";
 import { isProjectFilePathSafe, resolveProjectFilePath } from "./path-resolver.js";
 import { discoverFile } from "./file-discovery.js";
-import { applyAllChanges } from "./claude-apply.js";
 import { executeBatch } from "./batch-transform.js";
 
 interface SketchServerOptions {
   port: number;
-  apiKey?: string;
-  model?: string;
 }
 
 interface SketchServer {
@@ -32,15 +28,12 @@ interface SketchServer {
 }
 
 export function createSketchServer(portOrOptions: number | SketchServerOptions): SketchServer {
-  const { port, apiKey, model } = typeof portOrOptions === "number"
-    ? { port: portOrOptions, apiKey: undefined, model: undefined }
-    : portOrOptions;
+  const port = typeof portOrOptions === "number" ? portOrOptions : portOrOptions.port;
   const wss = new WebSocketServer({ port });
   const projectRoot = path.resolve(process.cwd());
   const undoStack: UndoEntry[] = [];
   let activeClient: WebSocket | null = null;
   let processing = false;
-  let generateLocked = false; // (#1) Lock queue during AI generation
   const queue: Array<{ msg: ClientMessage; ws: WebSocket }> = [];
 
   function extractErrorCode(err: unknown): TransformErrorCode | undefined {
@@ -58,7 +51,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
   }
 
   async function processQueue() {
-    if (processing || generateLocked || queue.length === 0) return;
+    if (processing || queue.length === 0) return;
     processing = true;
 
     const { msg, ws } = queue.shift()!;
@@ -70,7 +63,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             const error = msg.filePath.trim()
               ? "File path is outside the project root"
               : "File path could not be resolved for this element";
-            console.warn(`[FrameUp] Rejected reorder path: ${msg.filePath}`);
+            console.warn(`[ReactRewrite] Rejected reorder path: ${msg.filePath}`);
             send(ws, { type: "reorderComplete", success: false, error });
             break;
           }
@@ -124,7 +117,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             const error = msg.filePath.trim()
               ? "File path is outside the project root"
               : "File path could not be resolved for this element";
-            console.warn(`[FrameUp] Rejected property update path: ${msg.filePath}`);
+            console.warn(`[ReactRewrite] Rejected property update path: ${msg.filePath}`);
             send(ws, { type: "updatePropertyComplete", success: false, error });
             break;
           }
@@ -139,7 +132,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
                 classPattern: msg.classPattern,
                 standalone: msg.standalone,
               }]
-            : msg.updates.map((u: any) => ({
+            : msg.updates.map((u) => ({
                 tailwindPrefix: u.tailwindPrefix,
                 tailwindToken: u.tailwindToken,
                 value: u.value,
@@ -149,19 +142,19 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
               }));
 
           // Route through batch engine for the resolution chain (handles React 19 owner stack positions)
-          console.log(`[updateProperty] ${msg.filePath}:${msg.lineNumber} tag=${(msg as any).tagName} class="${((msg as any).className || "").slice(0, 40)}"`);
+          console.log(`[updateProperty] ${msg.filePath}:${msg.lineNumber} tag=${msg.tagName} class="${(msg.className || "").slice(0, 40)}"`);
           const batchResult = executeBatch(
             [{
               op: "updateClass" as const,
               file: msg.filePath,
               line: msg.lineNumber,
               col: msg.columnNumber,
-              tagName: (msg as any).tagName,
-              className: (msg as any).className,
-              parentTagName: (msg as any).parentTagName,
-              parentClassName: (msg as any).parentClassName,
-              nthOfType: (msg as any).nthOfType,
-              id: (msg as any).elementId,
+              tagName: msg.tagName,
+              className: msg.className,
+              parentTagName: msg.parentTagName,
+              parentClassName: msg.parentClassName,
+              nthOfType: msg.nthOfType,
+              id: msg.elementId,
               updates,
             }],
             projectRoot,
@@ -192,7 +185,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
             const error = msg.filePath.trim()
               ? "File path is outside the project root"
               : "File path could not be resolved for this element";
-            console.warn(`[FrameUp] Rejected text update path: ${msg.filePath}`);
+            console.warn(`[ReactRewrite] Rejected text update path: ${msg.filePath}`);
             send(ws, { type: "updateTextComplete", success: false, error });
             break;
           }
@@ -203,12 +196,12 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
               file: msg.filePath,
               line: msg.lineNumber,
               col: msg.columnNumber,
-              tagName: (msg as any).tagName,
-              className: (msg as any).className,
-              parentTagName: (msg as any).parentTagName,
-              parentClassName: (msg as any).parentClassName,
-              nthOfType: (msg as any).nthOfType,
-              id: (msg as any).elementId,
+              tagName: msg.tagName,
+              className: msg.className,
+              parentTagName: msg.parentTagName,
+              parentClassName: msg.parentClassName,
+              nthOfType: msg.nthOfType,
+              id: msg.elementId,
               originalText: msg.originalText,
               newText: msg.newText,
             }],
@@ -235,7 +228,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
         }
 
         case "commitBatch": {
-          console.log(`[commitBatch] Received ${msg.operations.length} operations:`, msg.operations.map((o: any) => `${o.op}@${o.file}:${o.line}`));
+          console.log(`[commitBatch] Received ${msg.operations.length} operations:`, msg.operations.map((o) => `${o.op}@${o.file}:${"line" in o ? o.line : o.fromLine}`));
           try {
             const batchResult = executeBatch(msg.operations, projectRoot);
             console.log(`[commitBatch] Results:`, batchResult.results.map(r => `${r.op}@${r.file}:${r.line} ${r.success ? "OK" : "FAIL: " + r.error}`));
@@ -266,20 +259,20 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
               success: allSuccess,
               results: resultsWithUndo,
               undoIds: batchUndoIds,
-            } as any);
+            });
           } catch (err) {
             send(ws, {
               type: "commitBatchComplete",
               success: false,
-              results: msg.operations.map((op: any) => ({
+              results: msg.operations.map((op) => ({
                 op: op.op,
                 file: op.file,
-                line: op.line ?? op.fromLine ?? 0,
+                line: "line" in op ? op.line : ("fromLine" in op ? op.fromLine : 0),
                 success: false,
                 error: err instanceof Error ? err.message : String(err),
               })),
               undoIds: [],
-            } as any);
+            });
           }
           break;
         }
@@ -364,18 +357,8 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
       resolvedTokens = config.tokens;
       send(ws, { type: "tailwindTokens", tokens: config.tokens });
     } catch (err) {
-      console.warn("[FrameUp] Could not resolve Tailwind config:", err);
+      console.warn("[ReactRewrite] Could not resolve Tailwind config:", err);
     }
-
-    // Send config — tells overlay whether API key is available for Path B
-    // NOTE: Config is sent once on connect and never updated. If the user adds
-    // an API key to .env after FrameUp starts, the overlay won't know until
-    // FrameUp is restarted. This is acceptable — .env changes require a process
-    // restart by convention.
-    send(ws, {
-      type: "config",
-      hasApiKey: !!(apiKey || process.env.ANTHROPIC_API_KEY),
-    } as any);
 
     ws.on("message", (data) => {
       let msg: ClientMessage;
@@ -393,7 +376,7 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
         case "getSiblings":
           // Can run concurrently (read-only)
           if (!isProjectFilePathSafe(msg.filePath, projectRoot)) {
-            console.warn(`[FrameUp] Rejected siblings path: ${msg.filePath}`);
+            console.warn(`[ReactRewrite] Rejected siblings path: ${msg.filePath}`);
             send(ws, { type: "siblingsList", siblings: [] });
             break;
           }
@@ -415,12 +398,12 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
 
         case "fileStat": {
           if (!isProjectFilePathSafe(msg.filePath, projectRoot)) {
-            send(ws, { type: "fileStatResult", filePath: msg.filePath, mtime: 0, size: 0 } as any);
+            send(ws, { type: "fileStatResult", filePath: msg.filePath, mtime: 0, size: 0 });
             break;
           }
           const resolvedStatPath = resolveProjectFilePath(msg.filePath, projectRoot);
           if (!resolvedStatPath) {
-            send(ws, { type: "fileStatResult", filePath: msg.filePath, mtime: 0, size: 0 } as any);
+            send(ws, { type: "fileStatResult", filePath: msg.filePath, mtime: 0, size: 0 });
             break;
           }
           try {
@@ -430,143 +413,10 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
               filePath: msg.filePath,
               mtime: stat.mtimeMs,
               size: stat.size,
-            } as any);
+            });
           } catch {
-            send(ws, { type: "fileStatResult", filePath: msg.filePath, mtime: 0, size: 0 } as any);
+            send(ws, { type: "fileStatResult", filePath: msg.filePath, mtime: 0, size: 0 });
           }
-          break;
-        }
-
-        case "applyAllChanges": {
-          if (generateLocked) {
-            send(ws, {
-              type: "applyAllComplete",
-              success: false,
-              appliedCount: 0,
-              failedCount: msg.changes.length,
-              undoIds: [],
-              error: "Another operation is in progress",
-            } as any);
-            break;
-          }
-          generateLocked = true;
-
-          const resolvedKey = apiKey || process.env.ANTHROPIC_API_KEY;
-          if (!resolvedKey) {
-            generateLocked = false;
-            send(ws, {
-              type: "applyAllComplete",
-              success: false,
-              appliedCount: 0,
-              failedCount: msg.changes.length,
-              undoIds: [],
-              error: "ANTHROPIC_API_KEY not set",
-            } as any);
-            break;
-          }
-
-          applyAllChanges({
-            changes: msg.changes,
-            apiKey: resolvedKey,
-            projectRoot,
-            onProgress: (message) => console.log(`[applyAll] ${message}`),
-          })
-            .then((result) => {
-              const undoIds: string[] = [];
-              for (const entry of result.undoEntries) {
-                const undoId = `apply-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-                undoStack.push({
-                  id: undoId,
-                  filePath: entry.filePath,
-                  content: entry.content,
-                  afterContent: entry.afterContent,
-                  timestamp: Date.now(),
-                });
-                undoIds.push(undoId);
-              }
-              send(ws, {
-                type: "applyAllComplete",
-                success: result.success,
-                appliedCount: result.appliedCount,
-                failedCount: result.failedCount,
-                undoIds,
-                error: result.error,
-              } as any);
-            })
-            .catch((err) => {
-              send(ws, {
-                type: "applyAllComplete",
-                success: false,
-                appliedCount: 0,
-                failedCount: msg.changes.length,
-                undoIds: [],
-                error: err instanceof Error ? err.message : "Unknown error",
-              } as any);
-            })
-            .finally(() => {
-              generateLocked = false;
-              processQueue();
-            });
-          break;
-        }
-
-        case "generate": {
-          const resolvedKey = apiKey || process.env.ANTHROPIC_API_KEY;
-          if (!resolvedKey) {
-            send(ws, {
-              type: "generateComplete",
-              success: false,
-              changes: [],
-              error: "No API key configured. Set ANTHROPIC_API_KEY in your environment:\n\nexport ANTHROPIC_API_KEY=sk-ant-...",
-            });
-            break;
-          }
-
-          // (#1) Lock the queue — no file writes until generate completes
-          generateLocked = true;
-
-          generate({
-            annotations: msg.annotations,
-            apiKey: resolvedKey,
-            projectRoot: projectRoot,
-            model: model,
-            onProgress(stage, message) {
-              send(ws, { type: "generateProgress", stage, message });
-            },
-          }).then((result) => {
-            const undoIds: string[] = [];
-            if (result.success) {
-              for (const entry of result.undoEntries) {
-                const undoId = randomUUID();
-                undoStack.push({
-                  id: undoId,
-                  filePath: entry.filePath,
-                  content: entry.content,
-                  afterContent: entry.afterContent,
-                  timestamp: Date.now(),
-                });
-                undoIds.push(undoId);
-              }
-            }
-            send(ws, {
-              type: "generateComplete",
-              success: result.success,
-              changes: result.changes,
-              error: result.error,
-              undoIds: result.success ? undoIds : undefined,
-            });
-          }).catch((err) => {
-            send(ws, {
-              type: "generateComplete",
-              success: false,
-              changes: [],
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }).finally(() => {
-            // (#1) Unlock queue and drain any pending messages
-            generateLocked = false;
-            processQueue();
-          });
           break;
         }
 
