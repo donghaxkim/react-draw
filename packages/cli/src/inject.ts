@@ -28,7 +28,11 @@ export function createProxyServer(
     selfHandleResponse: true,
   });
 
-  const overlayPath = path.join(__dirname, "overlay.js");
+  const bundledOverlayPath = path.join(__dirname, "overlay.js");
+  const workspaceOverlayPath = path.resolve(__dirname, "../../overlay/dist/overlay.js");
+  const overlayPath = fs.existsSync(workspaceOverlayPath)
+    ? workspaceOverlayPath
+    : bundledOverlayPath;
   let upstreamDown = false;
 
   const fontsDir = path.join(__dirname, "fonts");

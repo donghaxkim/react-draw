@@ -5,19 +5,17 @@ import { renderSections, isGroupCollapsed, onSectionExpand } from "./section-ren
 import { createSidebar } from "./property-sidebar.js";
 import { getTokenMap, resolveTokenForValue } from "./tailwind-resolver.js";
 import type { MergedTokenMap } from "./tailwind-resolver.js";
-import { send, onCommitResult, onMessage, requestFileDiscovery } from "../bridge.js";
+import { send, onMessage, requestFileDiscovery } from "../bridge.js";
 import { getCachedFilePath, setCachedFilePath } from "../file-discovery-cache.js";
 import { addChangeEntry } from "../changelog.js";
 import { showToast } from "../toolbar.js";
 import type { PropertyControl } from "./controls/types.js";
-import { pushUndoAction, type PropertyChangeRuntime } from "../canvas-state.js";
+import { addPendingPropertyOperation, pushUndoAction, type PropertyChangeRuntime } from "../canvas-state.js";
 import { dismissOnboarding } from "../onboarding.js";
 import { getFiberFromHostInstance, isCompositeFiber, getDisplayName } from "bippy";
 import { getOwnerStack } from "bippy/source";
 import { resolveFrameFilePath } from "../utils/source-resolve.js";
-import { addToPending, trackOverrides } from "../pending-changes.js";
 import { computeNthOfType } from "../utils/nth-of-type.js";
-import { hasApiKey } from "../config.js";
 import { classMatchesPrefix } from "../utils/class-matches-prefix.js";
 
 // Display values that enable flex layout controls
@@ -122,6 +120,7 @@ let cleanupExpandListener: (() => void) | null = null;
 
 // Cleanup for changelog onMessage listener
 let cleanupChangelogListener: (() => void) | null = null;
+let cleanupCommitListener: (() => void) | null = null;
 
 // ---------------------------------------------------------------------------
 // HMR survival observer
@@ -444,22 +443,43 @@ function addPendingFromCurrentState(): void {
     });
   }
 
-  const change = {
-    type: "property" as const,
-    componentName: info.componentName,
-    tag: info.tagName,
-    filePath: info.filePath,
-    textContent: (el.textContent || "").slice(0, 50),
-    className: el.className,
-    nthOfType: computeNthOfType(el),
-    parentTag: parentEl?.tagName.toLowerCase() || "",
-    parentClassName: parentEl?.className || "",
-    lineHint: info.lineNumber,
-    updates,
-  };
+  const mergeKey = [
+    info.filePath,
+    info.lineNumber,
+    info.columnNumber,
+    info.tagName,
+    el.id || "",
+    computeNthOfType(el),
+  ].join(":");
 
-  addToPending(change);
-  trackOverrides(change, el, state.activeOverrides);
+  addPendingPropertyOperation(
+    mergeKey,
+    {
+      op: "updateClass",
+      file: info.filePath,
+      line: info.lineNumber,
+      col: info.columnNumber - 1,
+      componentName: info.componentName,
+      tagName: el.tagName.toLowerCase(),
+      className: el.className || undefined,
+      parentTagName: parentEl?.tagName.toLowerCase(),
+      parentClassName: parentEl?.className || undefined,
+      nthOfType: computeNthOfType(el),
+      id: el.id || undefined,
+      updates: [...state.pendingBatch.values()].map((entry) => {
+        const desc = DESCRIPTOR_MAP.get(entry.property);
+        return {
+          tailwindPrefix: entry.tailwindPrefix,
+          tailwindToken: entry.tailwindToken,
+          value: entry.value,
+          relatedPrefixes: entry.relatedPrefixes,
+          classPattern: desc?.classPattern,
+          standalone: desc?.standalone,
+        };
+      }),
+    },
+    [...state.pendingBatch.values()].map((entry) => entry.property),
+  );
 }
 
 /**
@@ -506,23 +526,18 @@ export function initPropertyController(shadowRoot: ShadowRoot): void {
     resetState();
   });
 
-  // Surface transform errors from the CLI back to the user, and resolve in-flight commits
-  onCommitResult((success, errorCode, errorMessage) => {
-    // Always hide saving indicator
+  const handleCommitResult = (success: boolean, errorCode?: string, errorMessage?: string) => {
     if (sidebar) sidebar.hideSaving();
 
     if (inflightCommit) {
       clearTimeout(inflightCommit.timeoutId);
 
       if (success) {
-        // Commit succeeded — in-flight state already applied optimistically
         inflightCommit = null;
       } else {
-        // Commit failed — revert to previous originals and remove inline overrides
         const { batch, previousOriginals } = inflightCommit;
         inflightCommit = null;
 
-        // Restore originalValues to pre-commit state
         for (const [key] of batch) {
           const prev = previousOriginals.get(key);
           if (prev !== undefined) {
@@ -530,7 +545,6 @@ export function initPropertyController(shadowRoot: ShadowRoot): void {
           }
         }
 
-        // Remove inline style overrides for the failed batch
         if (state.selectedElement) {
           for (const [key] of batch) {
             (state.selectedElement.style as any)[key] = "";
@@ -540,7 +554,7 @@ export function initPropertyController(shadowRoot: ShadowRoot): void {
               state.currentValues.set(key, orig);
             }
           }
-          // Refresh control displays
+
           for (const ctrl of controls) {
             for (const [key] of batch) {
               const orig = state.originalValues.get(key);
@@ -549,7 +563,8 @@ export function initPropertyController(shadowRoot: ShadowRoot): void {
           }
         }
 
-        // Show error
+        lastCommitSnapshot = null;
+
         if (sidebar) {
           const friendlyMessages: Record<string, string> = {
             DYNAMIC_CLASSNAME: "Cannot modify dynamic className expression",
@@ -561,7 +576,6 @@ export function initPropertyController(shadowRoot: ShadowRoot): void {
         }
       }
     } else if (!success && sidebar) {
-      // No in-flight commit tracked but got an error — still show it
       const friendlyMessages: Record<string, string> = {
         DYNAMIC_CLASSNAME: "Cannot modify dynamic className expression",
         CONFLICTING_CLASS: "Conflicting conditional class detected",
@@ -570,12 +584,31 @@ export function initPropertyController(shadowRoot: ShadowRoot): void {
       const msg = friendlyMessages[errorCode || ""] || errorMessage || "Failed to write changes";
       sidebar.showWarning(msg, "Dismiss", () => sidebar.clearWarning());
     }
+  };
+
+  cleanupCommitListener = onMessage((msg) => {
+    if (msg.type !== "commitBatchComplete" || !inflightCommit) return;
+
+    const propertyResult = msg.results.find((result) => result.op === "updateClass");
+    if (!propertyResult) return;
+
+    const errorCodeMatch = propertyResult.error?.match(
+      /^(DYNAMIC_CLASSNAME|FILE_CHANGED|MAPPED_ELEMENT|CONFLICTING_CLASS|ELEMENT_NOT_FOUND)/
+    );
+
+    handleCommitResult(
+      propertyResult.success,
+      errorCodeMatch?.[1],
+      propertyResult.error || msg.error,
+    );
   });
 
   // Listen for successful commits to add changelog entries
   cleanupChangelogListener = onMessage((msg) => {
-    if (msg.type === "updatePropertyComplete" && msg.success && msg.undoId && lastCommitSnapshot) {
+    if (msg.type === "commitBatchComplete" && msg.success && lastCommitSnapshot) {
       const { componentInfo, batch } = lastCommitSnapshot;
+      const undoId = msg.results.find((result) => result.op === "updateClass")?.undoId ?? msg.undoIds[0];
+      if (!undoId) return;
       const identity = {
         componentName: componentInfo.componentName,
         filePath: componentInfo.filePath,
@@ -593,7 +626,7 @@ export function initPropertyController(shadowRoot: ShadowRoot): void {
           state: "active",
           propertyKey: update.cssProperty,
           elementIdentity: identity,
-          revertData: { type: "cliUndo", undoIds: [msg.undoId] },
+          revertData: { type: "cliUndo", undoIds: [undoId] },
         });
       }
       lastCommitSnapshot = null;
@@ -792,30 +825,16 @@ export function commit(): void {
     };
   });
 
-  addPendingPropertyOp({
-    op: "updateClass" as const,
-    file: filePath,
-    line: lineNumber,
-    col: columnNumber,
-    tagName: el?.tagName.toLowerCase(),
-    className: el?.className || undefined,
-    parentTagName: el?.parentElement?.tagName.toLowerCase(),
-    parentClassName: el?.parentElement?.className || undefined,
-    nthOfType: (() => {
-      if (!el) return 0;
-      const parent = el.parentElement;
-      if (!parent) return 0;
-      const tag = el.tagName;
-      let count = 0;
-      for (const child of Array.from(parent.children)) {
-        if (child === el) break;
-        if (child.tagName === tag) count++;
-      }
-      return count;
-    })(),
-    id: el?.id || undefined,
-    updates,
-  });
+  const mergeKey = [
+    filePath,
+    lineNumber,
+    columnNumber,
+    el?.tagName.toLowerCase() || "",
+    el?.id || "",
+    el ? computeNthOfType(el) : 0,
+  ].join(":");
+
+  addPendingFromCurrentState();
 
   // Push to canvas undo stack
   if (el && state.elementIdentity) {
@@ -823,6 +842,8 @@ export function commit(): void {
       type: "propertyChange",
       elementIdentity: state.elementIdentity,
       element: el,
+      pendingMergeKey: mergeKey,
+      pendingPropertyKeys: [...state.pendingBatch.values()].map(u => u.property),
       overrides: [...state.pendingBatch.values()].map(u => ({
         cssProperty: u.cssProperty,
         previousValue: u.originalValue,
@@ -914,6 +935,10 @@ export function setShowAllGroups(showAll: boolean): void {
  * Call once during overlay teardown.
  */
 export function destroyPropertyController(): void {
+  if (cleanupCommitListener) {
+    cleanupCommitListener();
+    cleanupCommitListener = null;
+  }
   if (cleanupChangelogListener) {
     cleanupChangelogListener();
     cleanupChangelogListener = null;

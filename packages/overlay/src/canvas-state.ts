@@ -14,11 +14,24 @@ export type ColorOverrideRuntime = ColorOverride & { targetElement: HTMLElement 
 /** Runtime extension of propertyChange — adds DOM element reference (not serializable). */
 export type PropertyChangeRuntime = Extract<CanvasUndoAction, { type: "propertyChange" }> & {
   element: HTMLElement;
+  pendingMergeKey?: string;
+  pendingPropertyKeys?: string[];
 };
 
 let moves: Map<string, MoveEntry> = new Map();
 let annotations: Annotation[] = [];
 let undoStack: CanvasUndoAction[] = [];
+type PendingPropertyOperation = {
+  mergeKey: string;
+  operation: Extract<BatchOperation, { op: "updateClass" }>;
+  propertyKeys: string[];
+};
+let pendingPropertyOps: PendingPropertyOperation[] = [];
+type PendingReorderOperation = {
+  mergeKey: string;
+  operation: Extract<BatchOperation, { op: "reorder" }>;
+};
+let pendingReorderOps: PendingReorderOperation[] = [];
 let activeTool: ToolType = "select";
 let originalsHidden = true;
 
@@ -242,6 +255,9 @@ export function canvasUndo(): string | null {
           (propAction.element.style as any)[override.cssProperty] = override.previousValue;
         }
       }
+      if (propAction.pendingMergeKey && propAction.pendingPropertyKeys?.length) {
+        removePendingPropertyOperation(propAction.pendingMergeKey, propAction.pendingPropertyKeys);
+      }
       return "property reverted";
     }
     case "textEditRestore": {
@@ -332,6 +348,7 @@ export function resetCanvas(): void {
   annotations = [];
   undoStack = [];
   pendingPropertyOps = [];
+  pendingReorderOps = [];
   textEditDomHints.clear();
   originalsHidden = true;
   canvasScale = 1;
@@ -344,7 +361,7 @@ export function resetCanvas(): void {
 // --- Has Changes ---
 
 export function hasChanges(): boolean {
-  return moves.size > 0 || annotations.length > 0;
+  return moves.size > 0 || annotations.length > 0 || pendingPropertyOps.length > 0 || pendingReorderOps.length > 0;
 }
 
 export function canUndo(): boolean {
@@ -406,6 +423,85 @@ function deriveLayoutContext(layout?: ParentLayout): "flex" | "grid" | "block" |
   return "block";
 }
 
+export function addPendingPropertyOperation(
+  mergeKey: string,
+  operation: Extract<BatchOperation, { op: "updateClass" }>,
+  propertyKeys: string[],
+): void {
+  const existing = pendingPropertyOps.find((entry) => entry.mergeKey === mergeKey);
+  if (!existing) {
+    pendingPropertyOps.push({
+      mergeKey,
+      operation: {
+        ...operation,
+        updates: [...operation.updates],
+      },
+      propertyKeys: [...propertyKeys],
+    });
+    notifyStateChange();
+    return;
+  }
+
+  const mergedUpdates = [...existing.operation.updates];
+  const mergedPropertyKeys = [...existing.propertyKeys];
+  for (const [index, update] of operation.updates.entries()) {
+    const propertyKey = propertyKeys[index] ?? `${update.tailwindPrefix}:${index}`;
+    const existingIndex = mergedPropertyKeys.indexOf(propertyKey);
+    if (existingIndex >= 0) {
+      mergedUpdates[existingIndex] = update;
+    } else {
+      mergedUpdates.push(update);
+      mergedPropertyKeys.push(propertyKey);
+    }
+  }
+
+  existing.operation = {
+    ...existing.operation,
+    ...operation,
+    updates: mergedUpdates,
+  };
+  existing.propertyKeys = mergedPropertyKeys;
+  notifyStateChange();
+}
+
+function removePendingPropertyOperation(mergeKey: string, propertyKeys: string[]): void {
+  const index = pendingPropertyOps.findIndex((entry) => entry.mergeKey === mergeKey);
+  if (index < 0) return;
+
+  const entry = pendingPropertyOps[index];
+  const keptUpdates: typeof entry.operation.updates = [];
+  const keptPropertyKeys: string[] = [];
+  for (const [updateIndex, existingPropertyKey] of entry.propertyKeys.entries()) {
+    if (propertyKeys.includes(existingPropertyKey)) continue;
+    keptUpdates.push(entry.operation.updates[updateIndex]);
+    keptPropertyKeys.push(existingPropertyKey);
+  }
+
+  if (keptUpdates.length === 0) {
+    pendingPropertyOps.splice(index, 1);
+  } else {
+    entry.operation = {
+      ...entry.operation,
+      updates: keptUpdates,
+    };
+    entry.propertyKeys = keptPropertyKeys;
+  }
+  notifyStateChange();
+}
+
+export function addPendingReorderOperation(
+  mergeKey: string,
+  operation: Extract<BatchOperation, { op: "reorder" }>,
+): void {
+  const existing = pendingReorderOps.find((entry) => entry.mergeKey === mergeKey);
+  if (existing) {
+    existing.operation = operation;
+  } else {
+    pendingReorderOps.push({ mergeKey, operation });
+  }
+  notifyStateChange();
+}
+
 /**
  * Build deterministic batch operations from current canvas state.
  * Returns operations for color changes, text edits, and moves.
@@ -413,6 +509,13 @@ function deriveLayoutContext(layout?: ParentLayout): "flex" | "grid" | "block" |
  */
 export function buildBatchOperations(): BatchOperation[] {
   const ops: BatchOperation[] = [];
+
+  for (const entry of pendingPropertyOps) {
+    ops.push({
+      ...entry.operation,
+      updates: [...entry.operation.updates],
+    });
+  }
 
   // Color changes → updateClass
   for (const ann of annotations) {
@@ -450,6 +553,7 @@ export function buildBatchOperations(): BatchOperation[] {
           parentClassName: hints?.parentClassName,
           originalText: textAnn.originalText,
           newText: textAnn.newText,
+          cursorOffset: textAnn.cursorOffset,
         });
       }
     }
@@ -511,6 +615,10 @@ export function buildBatchOperations(): BatchOperation[] {
         layoutContext: layout,
       });
     }
+  }
+
+  for (const entry of pendingReorderOps) {
+    ops.push(entry.operation);
   }
 
   return ops;

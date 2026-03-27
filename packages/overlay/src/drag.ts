@@ -2,10 +2,9 @@
 import { getFiberFromHostInstance, isCompositeFiber, getDisplayName } from "bippy";
 import type { ComponentInfo, SiblingInfo } from "@frameup/shared";
 import { send, onMessage } from "./bridge.js";
+import { addPendingReorderOperation } from "./canvas-state.js";
 import { clearSelection, setDragCallbacks } from "./selection.js";
 import { getShadowRoot, showToast } from "./toolbar.js";
-import { addToPending } from "./pending-changes.js";
-import { hasApiKey } from "./config.js";
 
 // Drag state — preview is created immediately, siblings arrive async
 let preview: HTMLDivElement | null = null;
@@ -233,58 +232,17 @@ function handleDragEnd(e: MouseEvent): void {
     return;
   }
 
-  // Path B: API key present → add to pending store
-  if (hasApiKey()) {
-    const el = dragElement;
-    const parentEl = el?.parentElement;
-    const children = parentEl ? Array.from(parentEl.children) : [];
-    const childrenContext = children.map((child) => ({
-      tag: child.tagName.toLowerCase(),
-      className: (child as HTMLElement).className || "",
-      textContent: (child.textContent || "").slice(0, 30),
-    }));
+  addPendingReorderOperation(
+    `${dragSelection.filePath}:${dragSelection.lineNumber}`,
+    {
+      op: "reorder",
+      file: dragSelection.filePath,
+      fromLine: dragSelection.lineNumber,
+      toLine: dropTarget.lineNumber,
+    },
+  );
 
-    // Compute child indices from DOM order
-    const fromIndex = el && parentEl ? Array.from(parentEl.children).indexOf(el) : 0;
-    // For toIndex, use siblingElements map to find the drop target element
-    let toIndex = fromIndex;
-    if (dropTarget && parentEl) {
-      const dropEl = siblingElements.get(dropTarget.lineNumber)?.el;
-      if (dropEl) {
-        const dropIdx = Array.from(parentEl.children).indexOf(dropEl);
-        if (dropIdx >= 0) toIndex = dropIdx;
-      }
-    }
-
-    addToPending({
-      type: "reorder",
-      componentName: dragSelection.componentName,
-      tag: el?.tagName.toLowerCase() || "div",
-      filePath: dragSelection.filePath,
-      parentClassName: parentEl?.className || "",
-      lineHint: dragSelection.lineNumber,
-      childrenContext,
-      fromIndex,
-      toIndex,
-    });
-    cleanupDrag();
-    return;
-  }
-
-  send({
-    type: "reorder",
-    filePath: dragSelection.filePath,
-    fromLine: dragSelection.lineNumber,
-    toLine: dropTarget.lineNumber,
-    fromComponent: dragSelection.componentName,
-    toComponent: dropTarget.componentName,
-  });
-
-  // Hide visual elements; full cleanup happens on reorderComplete
-  if (preview) preview.style.display = "none";
-  if (dropIndicator) dropIndicator.style.display = "none";
-  isDragging = false;
-  dragStartPos = null;
+  cleanupDrag();
 }
 
 function cleanupDrag(): void {

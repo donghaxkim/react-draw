@@ -159,14 +159,21 @@ function computeASTNthOfType(astPath: any): number {
   return count;
 }
 
-/** Check if a JSX element's text content (recursive) contains the given text. */
+/** Collapse all whitespace runs (including newlines) to a single space. */
+function normalizeWs(s: string): string {
+  return s.replace(/\s+/g, " ");
+}
+
+/** Check if a JSX element's text content (recursive) contains the given text.
+ *  Uses whitespace-normalized comparison because React collapses JSX whitespace
+ *  (newlines → spaces) but the AST retains raw formatting. */
 function containsText(node: any, text: string): boolean {
-  const trimmed = text.trim();
-  if (!trimmed) return false;
+  const normalized = normalizeWs(text.trim());
+  if (!normalized) return false;
   const children = node.children;
   if (!children) return false;
   for (const child of children) {
-    if (child.type === "JSXText" && child.value.trim().includes(trimmed)) return true;
+    if (child.type === "JSXText" && normalizeWs(child.value.trim()).includes(normalized)) return true;
     if (child.type === "JSXElement" && containsText(child, text)) return true;
   }
   return false;
@@ -407,7 +414,7 @@ function coalesceOps(resolved: ResolvedOp[]): ResolvedOp[] {
 
 // ── Mutation application ─────────────────────────────────────────────────
 
-function applyOp(j: any, root: any, rop: ResolvedOp): string | undefined {
+function applyOp(j: any, root: any, rop: ResolvedOp, source: string): string | undefined {
   const { op, node } = rop;
 
   switch (op.op) {
@@ -425,7 +432,7 @@ function applyOp(j: any, root: any, rop: ResolvedOp): string | undefined {
     }
 
     case "updateText": {
-      const found = mutateTextContent(node, op.originalText, op.newText);
+      const found = mutateTextContent(node, op.originalText, op.newText, source, op.cursorOffset);
       if (!found) {
         return `No matching text "${op.originalText}" found in element at ${op.line}:${op.col}`;
       }
@@ -652,7 +659,7 @@ export function executeBatch(
       }
 
       try {
-        const error = applyOp(j, root, rop);
+        const error = applyOp(j, root, rop, beforeContent);
         if (error) {
           results[rop.index] = { op: rop.op.op, file, line, success: false, error };
         } else {

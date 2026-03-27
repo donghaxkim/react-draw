@@ -11,6 +11,29 @@ function withTempFile(source: string, ext: string = ".tsx"): string {
   return filePath;
 }
 
+function applyTextEdit(filePath: string, line: number, col: number, originalText: string, newText: string): string | null {
+  const result = updateTextContent(filePath, line, col, originalText, newText);
+  if (result) {
+    fs.writeFileSync(filePath, result, "utf-8");
+  }
+  return result;
+}
+
+function findTagPosition(source: string, tagName: string): { line: number; col: number } {
+  const marker = `<${tagName}`;
+  const index = source.indexOf(marker);
+  if (index === -1) {
+    throw new Error(`Tag <${tagName}> not found`);
+  }
+
+  const before = source.slice(0, index);
+  const lines = before.split("\n");
+  return {
+    line: lines.length,
+    col: lines[lines.length - 1].length,
+  };
+}
+
 describe("updateTextContent", () => {
   it("replaces JSXText in a simple element", () => {
     const source = `function App() {\n  return <h1>Hello World</h1>;\n}`;
@@ -73,5 +96,74 @@ describe("updateTextContent", () => {
     const filePath = withTempFile(source);
     const result = updateTextContent(filePath, 2, 9, "Yes", "Sure");
     expect(result).toBeNull();
+  });
+
+  it("preserves boundary spaces when replacing text across nested elements", () => {
+    const source = `function App() {\n  return (\n    <p>\n      i study <strong>math</strong> at <strong>waterloo</strong>\n      and do <strong>software</strong> stuff.\n    </p>\n  );\n}`;
+    const filePath = withTempFile(source);
+
+    const result = applyTextEdit(
+      filePath,
+      3,
+      4,
+      "i study math at waterloo and do software stuff.",
+      "i study math at waterloo and enjoy software.",
+    );
+
+    expect(result).not.toBeNull();
+    expect(result).toContain('<strong>math</strong>{" "}at{" "}<strong>waterloo</strong>{" "}and enjoy software.');
+  });
+
+  it("supports deleting a space at a JSX child boundary", () => {
+    const source = `function App() {\n  return (\n    <p>\n      hello <strong>world</strong>\n      again\n    </p>\n  );\n}`;
+    const filePath = withTempFile(source);
+
+    const result = applyTextEdit(filePath, 3, 4, "hello world again", "hello worldagain");
+
+    expect(result).not.toBeNull();
+    expect(result).toContain("</strong>again");
+  });
+
+  it("supports inserting a space at a JSX child boundary", () => {
+    const source = `function App() {\n  return (\n    <p>hello <strong>world</strong>again</p>\n  );\n}`;
+    const filePath = withTempFile(source);
+
+    const result = applyTextEdit(filePath, 3, 4, "hello worldagain", "hello world again");
+
+    expect(result).not.toBeNull();
+    expect(result).toContain('</strong>{" "}again');
+  });
+
+  it("supports inserting an extra space at an existing child boundary", () => {
+    const source = `function App() {\n  return (\n    <p>hello <strong>world</strong> again</p>\n  );\n}`;
+    const filePath = withTempFile(source);
+
+    const result = applyTextEdit(filePath, 3, 4, "hello world again", "hello world  again");
+
+    expect(result).not.toBeNull();
+    expect(result).toContain('</strong>{" "}{" "}again');
+  });
+
+  it("supports inserting an extra space in plain text without moving another space", () => {
+    const source = `function App() {\n  return <p>alpha beta gamma</p>;\n}`;
+    const filePath = withTempFile(source);
+
+    const result = applyTextEdit(filePath, 2, 9, "alpha beta gamma", "alpha  beta gamma");
+
+    expect(result).not.toBeNull();
+    expect(result).toContain("alpha  beta gamma");
+  });
+
+  it("keeps spaces intact across sequential edits", () => {
+    const source = `function App() {\n  return (\n    <p>\n      hello <strong>world</strong>\n      again\n    </p>\n  );\n}`;
+    const filePath = withTempFile(source);
+
+    const first = applyTextEdit(filePath, 3, 4, "hello world again", "hello worldagain");
+    expect(first).not.toBeNull();
+
+    const pos = findTagPosition(fs.readFileSync(filePath, "utf-8"), "p");
+    const second = applyTextEdit(filePath, pos.line, pos.col, "hello worldagain", "hello worldlater");
+    expect(second).not.toBeNull();
+    expect(second).toContain("</strong>later");
   });
 });

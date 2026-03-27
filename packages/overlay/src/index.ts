@@ -311,6 +311,10 @@ function init(): void {
   // Handle commitBatch completion from CLI
   onMessage((msg) => {
     if (msg.type === "commitBatchComplete") {
+      // Property sidebar saves also use commitBatch now; only the explicit
+      // confirm/apply flow should drive the global generate/apply UI.
+      if (!generating) return;
+
       // Only reset generating if no generate is also pending
       if (!hasTextAnnotations()) {
         generating = false;

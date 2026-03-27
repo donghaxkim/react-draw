@@ -112,6 +112,7 @@ export type BatchOperation =
       fileSize?: number;
       originalText: string;
       newText: string;
+      cursorOffset?: number;
     }
   | {
       op: "reorder";
@@ -195,6 +196,7 @@ export type ClientMessage =
       columnNumber: number;
       originalText: string;
       newText: string;
+      cursorOffset?: number;
     }
   | { type: "revertChanges"; undoIds: string[] }
   | { type: "discoverFile"; componentName: string }
@@ -404,6 +406,7 @@ export interface TextEditAnnotation {
   columnNumber: number;
   originalText: string;
   newText: string;
+  cursorOffset?: number;
 }
 
 export type Annotation = TextAnnotation | ColorOverride | TextEditAnnotation;
@@ -487,6 +490,7 @@ export interface SerializedAnnotations {
     column: number;
     originalText: string;
     newText: string;
+    cursorOffset?: number;
   }>;
 }
 

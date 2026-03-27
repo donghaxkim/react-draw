@@ -41,6 +41,7 @@ let pendingCommit: {
   componentInfo: ComponentInfo;
   originalText: string;
   newText: string;
+  cursorOffset?: number;
   originalInnerHTML: string;
   tagName: string;
 } | null = null;
@@ -103,6 +104,7 @@ function handleUpdateTextResponse(msg: Extract<ServerMessage, { type: "updateTex
       columnNumber: pc.componentInfo.columnNumber,
       originalText: pc.originalText,
       newText: pc.newText,
+      cursorOffset: pc.cursorOffset,
     };
     const identity: ElementIdentity = {
       componentName: pc.componentInfo.componentName,
@@ -352,6 +354,20 @@ function resolveClickTarget(e: MouseEvent): HTMLElement | null {
   return getPageElementAtPoint(e.clientX, e.clientY);
 }
 
+function getCaretOffsetWithin(element: HTMLElement): number | undefined {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return undefined;
+
+  const range = selection.getRangeAt(0);
+  if (!range.collapsed) return undefined;
+  if (!element.contains(range.endContainer)) return undefined;
+
+  const prefix = range.cloneRange();
+  prefix.selectNodeContents(element);
+  prefix.setEnd(range.endContainer, range.endOffset);
+  return prefix.toString().length;
+}
+
 function commitAndExit(options?: {
   nextSelection?: HTMLElement | null;
   clearSelection?: boolean;
@@ -360,6 +376,7 @@ function commitAndExit(options?: {
   if (!editingElement) return;
 
   const newText = lastKnownText;
+  const cursorOffset = getCaretOffsetWithin(editingElement);
   const changed = newText !== originalTextContent;
 
   console.log("[FrameUp:textEdit] commitAndExit changed:", changed, "componentInfo:", componentInfo?.componentName, "filePath:", componentInfo?.filePath);
@@ -389,6 +406,7 @@ function commitAndExit(options?: {
         columnNumber: componentInfo.columnNumber || 0,
         originalText: originalTextContent,
         newText,
+        cursorOffset,
       };
       const identity: ElementIdentity = {
         componentName: componentInfo.componentName,
