@@ -1,12 +1,13 @@
 // packages/overlay/src/canvas-state.ts
 import type {
   ToolType, Annotation, TextAnnotation, ColorOverride,
-  ComponentRef, CanvasUndoAction, SerializedAnnotations,
+  ComponentRef, CanvasUndoAction,
   TextEditAnnotation, ElementIdentity, BatchOperation,
-} from "@frameup/shared";
+} from "@react-rewrite/shared";
 import type { MoveEntry, ParentLayout } from "./move-state.js";
 import { applyMoveTransform, clearMoveTransform, reacquireMovedElement } from "./move-state.js";
 import { getTokenMap } from "./properties/tailwind-resolver.js";
+import { setStyle } from "./utils/style-access.js";
 
 /** Runtime extension of ColorOverride — adds the DOM element reference (not serializable). */
 export type ColorOverrideRuntime = ColorOverride & { targetElement: HTMLElement };
@@ -243,7 +244,7 @@ export function canvasUndo(): string | null {
     case "colorChange": {
       const ann = annotations.find(a => a.id === action.annotationId) as ColorOverrideRuntime | undefined;
       if (ann?.targetElement) {
-        (ann.targetElement.style as any)[action.property] = action.previousColor;
+        setStyle(ann.targetElement, action.property, action.previousColor);
       }
       removeAnnotation(action.annotationId);
       return "color reverted";
@@ -252,7 +253,7 @@ export function canvasUndo(): string | null {
       const propAction = action as PropertyChangeRuntime;
       if (propAction.element && document.contains(propAction.element)) {
         for (const override of propAction.overrides) {
-          (propAction.element.style as any)[override.cssProperty] = override.previousValue;
+          setStyle(propAction.element, override.cssProperty, override.previousValue);
         }
       }
       if (propAction.pendingMergeKey && propAction.pendingPropertyKeys?.length) {
@@ -329,7 +330,7 @@ export function resetCanvas(): void {
     if (ann.type === "colorChange") {
       const co = ann as ColorOverrideRuntime;
       if (co.targetElement) {
-        (co.targetElement.style as any)[co.property] = co.fromColor;
+        setStyle(co.targetElement, co.property, co.fromColor);
       }
     }
   }
@@ -339,7 +340,7 @@ export function resetCanvas(): void {
       const propAction = action as PropertyChangeRuntime;
       if (propAction.element && document.contains(propAction.element)) {
         for (const override of propAction.overrides) {
-          (propAction.element.style as any)[override.cssProperty] = override.previousValue;
+          setStyle(propAction.element, override.cssProperty, override.previousValue);
         }
       }
     }
@@ -624,29 +625,3 @@ export function buildBatchOperations(): BatchOperation[] {
   return ops;
 }
 
-/**
- * Check if there are any text annotations (freeform notes) that need AI generation.
- */
-export function hasTextAnnotations(): boolean {
-  return annotations.some(a => a.type === "text");
-}
-
-/**
- * Serialize only the text annotations for the AI generate path.
- */
-export function serializeTextAnnotationsOnly(): SerializedAnnotations {
-  const anns: SerializedAnnotations["annotations"] = [];
-  for (const ann of annotations) {
-    if (ann.type === "text") {
-      anns.push({
-        type: "text",
-        content: ann.content,
-        position: ann.position,
-        targetComponent: ann.targetComponent?.componentName,
-        targetFile: ann.targetComponent?.filePath,
-        targetLine: ann.targetComponent?.lineNumber,
-      });
-    }
-  }
-  return { moves: [], annotations: anns, colorChanges: [], textEdits: [] };
-}

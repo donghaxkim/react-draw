@@ -1,7 +1,8 @@
-import type { ComponentRef, ElementIdentity } from "@frameup/shared";
+import type { ComponentRef, ElementIdentity } from "@react-rewrite/shared";
 import { getFiberFromHostInstance, isCompositeFiber, getDisplayName } from "bippy";
 import { getOwnerStack, normalizeFileName, isSourceFile } from "bippy/source";
 import { SHADOWS } from "./design-tokens.js";
+import { setStyle } from "./utils/style-access.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -62,10 +63,10 @@ const PLACEHOLDER_PROPS = [
 
 export function createPlaceholder(element: HTMLElement): HTMLElement {
   const ph = document.createElement("div");
-  ph.setAttribute("data-frameup-placeholder", "true");
+  ph.setAttribute("data-react-rewrite-placeholder", "true");
   const computed = getComputedStyle(element);
   for (const prop of PLACEHOLDER_PROPS) {
-    (ph.style as any)[prop] = computed[prop as any];
+    setStyle(ph, prop, computed[prop as keyof CSSStyleDeclaration] as string);
   }
   ph.style.visibility = "hidden";
   return ph;

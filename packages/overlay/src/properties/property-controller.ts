@@ -1,4 +1,4 @@
-import type { ComponentInfo, ElementIdentity, PropertyGroup } from "@frameup/shared";
+import type { ComponentInfo, ElementIdentity, PropertyGroup } from "@react-rewrite/shared";
 import { ALL_DESCRIPTORS } from "./property-descriptors.js";
 const DESCRIPTOR_MAP = new Map(ALL_DESCRIPTORS.map(d => [d.key, d]));
 import { renderSections, isGroupCollapsed, onSectionExpand } from "./section-renderer.js";
@@ -17,6 +17,7 @@ import { getOwnerStack } from "bippy/source";
 import { resolveFrameFilePath } from "../utils/source-resolve.js";
 import { computeNthOfType } from "../utils/nth-of-type.js";
 import { classMatchesPrefix } from "../utils/class-matches-prefix.js";
+import { setStyle, clearStyle } from "../utils/style-access.js";
 
 // Display values that enable flex layout controls
 const FLEX_DISPLAYS = new Set(["flex", "inline-flex"]);
@@ -547,7 +548,7 @@ export function initPropertyController(shadowRoot: ShadowRoot): void {
 
         if (state.selectedElement) {
           for (const [key] of batch) {
-            (state.selectedElement.style as any)[key] = "";
+            clearStyle(state.selectedElement, key);
             state.activeOverrides.delete(key);
             const orig = state.originalValues.get(key);
             if (orig !== undefined) {
@@ -747,7 +748,7 @@ export function preview(key: string, cssValue: string): void {
   if (!desc || !state.selectedElement) return;
 
   // Layer 1: instant inline style override
-  (state.selectedElement.style as any)[desc.key] = cssValue;
+  setStyle(state.selectedElement, desc.key, cssValue);
   state.activeOverrides.set(key, cssValue);
   state.currentValues.set(key, cssValue);
 
@@ -786,7 +787,7 @@ export function preview(key: string, cssValue: string): void {
       sidebar.showWarning("Element hidden", "Restore", () => {
         // Revert display to original value
         if (state.selectedElement) {
-          (state.selectedElement.style as any).display = originalDisplay;
+          setStyle(state.selectedElement, "display", originalDisplay);
         }
         state.activeOverrides.delete("display");
         state.currentValues.set("display", originalDisplay);
@@ -868,7 +869,7 @@ export function cancel(): void {
 
   // Revert inline style overrides
   for (const [key] of state.activeOverrides) {
-    (state.selectedElement.style as any)[key] = "";
+    clearStyle(state.selectedElement, key);
   }
 
   // Restore currentValues to originals

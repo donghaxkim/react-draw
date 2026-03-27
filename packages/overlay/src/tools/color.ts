@@ -6,6 +6,7 @@ import { addColorBadge } from "../annotation-layer.js";
 import { resolveComponentAtPoint } from "./resolve-helper.js";
 import { openColorPicker, closeColorPicker } from "../color-picker.js";
 import { getProjectColors } from "../properties/tailwind-resolver.js";
+import { setStyle, getStyle } from "../utils/style-access.js";
 
 let targetEl: HTMLElement | null = null;
 let targetComp: Awaited<ReturnType<typeof resolveComponentAtPoint>> = null;
@@ -42,7 +43,7 @@ export const colorHandler: ToolEventHandler = {
       projectColors: getProjectColors(),
       onColorChange(hex) {
         if (targetEl) {
-          (targetEl.style as any)[selectedProperty] = hex;
+          setStyle(targetEl, selectedProperty, hex);
         }
       },
       onPickedToken(token) {
@@ -56,7 +57,7 @@ export const colorHandler: ToolEventHandler = {
         setInteractionPointerEvents(true);
         if (!targetEl || !targetComp) return;
         const fromColor = selectedProperty === "backgroundColor" ? originalValues.bg : originalValues.color;
-        const toColor = (targetEl.style as any)[selectedProperty];
+        const toColor = getStyle(targetEl, selectedProperty);
         if (toColor && toColor !== fromColor) {
           const id = crypto.randomUUID();
           const rect = targetEl.getBoundingClientRect();
