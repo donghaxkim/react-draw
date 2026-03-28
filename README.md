@@ -4,6 +4,28 @@
 
 It is built for local development and works by opening a proxy in front of your dev server and injecting an overlay into the page.
 
+## Fastest path
+
+You do not need to download or clone this repo.
+
+From the root of your React app:
+
+```bash
+npm install -D react-rewrite-cli
+```
+
+Start your dev server, then in a second terminal run:
+
+```bash
+npx react-rewrite
+```
+
+If you want to try it without installing first:
+
+```bash
+npx react-rewrite-cli@latest
+```
+
 ## What it does
 
 - Select an element and inspect its component name, file path, and line number
@@ -27,8 +49,10 @@ Tailwind CSS is recommended if you want to use the property editor. Text editing
 Run this in the root of the React app you want to edit:
 
 ```bash
-npm install -D react-rewrite
+npm install -D react-rewrite-cli
 ```
+
+If you don't want to install it first, you can also run it directly with `npx react-rewrite-cli@latest`.
 
 ## Quick start
 
@@ -42,7 +66,7 @@ npx react-rewrite
 If auto-detection does not pick the right port, pass it explicitly:
 
 ```bash
-npx react-rewrite 3000 (your port)
+npx react-rewrite 3000
 ```
 
 The tool opens a local proxy in your browser, shows the editing overlay, and writes confirmed changes back into files inside your project.

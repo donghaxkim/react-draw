@@ -70,6 +70,13 @@ export function destroyInlineTextEdit(): void {
   unsubscribeMessage = null;
 }
 
+export function cancelTextEditSession(): void {
+  if (!editingElement) return;
+  editingElement.innerHTML = originalInnerHTML;
+  pendingCommit = null;
+  exitEditMode();
+}
+
 function handleUpdateTextResponse(msg: Extract<ServerMessage, { type: "updateTextComplete" }>): void {
   if (msg.success && msg.undoId && pendingCommit) {
     // Path A: AST write succeeded — record as active change with undo support

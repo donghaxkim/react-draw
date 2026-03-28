@@ -25,10 +25,10 @@ import {
 } from "./canvas-state.js";
 import { initPropertyController, destroyPropertyController } from "./properties/property-controller.js";
 import { textHandler, cleanupTextTool } from "./tools/text.js";
-import { initInlineTextEdit, destroyInlineTextEdit } from "./inline-text-edit.js";
+import { initInlineTextEdit, destroyInlineTextEdit, cancelTextEditSession } from "./inline-text-edit.js";
 import { initCanvasTransform, destroyCanvasTransform, resetCanvasTransform } from "./canvas-transform.js";
 import { COLORS, SHADOWS, RADII, TRANSITIONS, FONT_FAMILY } from "./design-tokens.js";
-import { initChangelog, destroyChangelog, addChangeEntry, isChangelogOpen, setChangelogOpen } from "./changelog.js";
+import { initChangelog, destroyChangelog, addChangeEntry, isChangelogOpen, setChangelogOpen, clearChangelog } from "./changelog.js";
 
 declare global {
   interface Window {
@@ -148,6 +148,26 @@ function installGlobalErrorHandlers(): void {
 }
 
 let moveObserver: MutationObserver | null = null;
+
+function resetOverlayState(): void {
+  cancelTextEditSession();
+  clearSelection();
+  clearAnnotationLayer();
+  clearChangelog();
+  setChangelogOpen(false);
+  resetCanvas();
+  resetCanvasTransform();
+  clearElementCache();
+  clearVisibilityCache();
+
+  if (getActiveTool() !== "select") {
+    setActiveTool("select");
+  } else {
+    setEnabled(true);
+    activateInteraction("select");
+    updateActiveToolUI("select");
+  }
+}
 
 function restoreMoveToElement(id: string, entry: MoveEntry, newEl: HTMLElement): void {
   entry.originalCssText = newEl.style.cssText;
@@ -347,12 +367,8 @@ function init(): void {
 
   // Clear All
   setOnClearAll(() => {
-    clearSelection();
-    clearAnnotationLayer();
-    resetCanvas();
-    resetCanvasTransform();
-    updateEyeButton(true); // Reset eye icon to closed (originals hidden)
-    showToast("Canvas cleared");
+    resetOverlayState();
+    showToast("Everything reset");
   });
 
   console.log("[ReactRewrite] Overlay initialized with Phase 2A canvas tools");

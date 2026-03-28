@@ -199,7 +199,6 @@ export function setOriginalsHidden(hidden: boolean): void {
 export function hasMoveForElement(el: HTMLElement): boolean {
   for (const entry of moves.values()) {
     if (entry.element === el) return true;
-    if (entry.element.contains(el) || el.contains(entry.element)) return true;
   }
   return false;
 }
@@ -214,7 +213,6 @@ export function getMoveForElement(el: HTMLElement): MoveEntry | undefined {
 export function getMoveContainingElement(el: HTMLElement): MoveEntry | undefined {
   for (const entry of moves.values()) {
     if (entry.element === el) return entry;
-    if (entry.element.contains(el) || el.contains(entry.element)) return entry;
   }
   return undefined;
 }
@@ -624,4 +622,3 @@ export function buildBatchOperations(): BatchOperation[] {
 
   return ops;
 }
-

@@ -1,6 +1,6 @@
 {
-  "name": "react-rewrite",
-  "version": "0.1.0",
+  "name": "react-rewrite-cli",
+  "version": "0.1.1",
   "description": "Visual overlay for React dev servers — select components, drag to reorder, and draw on a Figma-style canvas",
   "keywords": [
     "react",
@@ -17,7 +17,7 @@
   "homepage": "https://github.com/donghaxkim/react-rewrite",
   "repository": {
     "type": "git",
-    "url": "https://github.com/donghaxkim/react-rewrite.git",
+    "url": "git+https://github.com/donghaxkim/react-rewrite.git",
     "directory": "packages/cli"
   },
   "engines": {
@@ -26,7 +26,7 @@
   "license": "MIT",
   "author": "Dongha Kim",
   "bin": {
-    "react-rewrite": "./bin/react-rewrite.js"
+    "react-rewrite": "bin/react-rewrite.js"
   },
   "type": "module",
   "main": "dist/index.js",
@@ -39,7 +39,8 @@
     "build": "tsc && cp ../overlay/dist/overlay.js dist/overlay.js && mkdir -p dist/fonts && cp src/fonts/*.woff2 dist/fonts/",
     "dev": "tsc --watch",
     "test": "vitest",
-    "prepublishOnly": "pnpm run build && pnpm run test -- --run"
+    "test:run": "vitest run",
+    "prepublishOnly": "pnpm run build && pnpm run test:run"
   },
   "dependencies": {
     "chalk": "^5.4.0",
