@@ -52,6 +52,11 @@ export function tryStartMove(clientX: number, clientY: number, el: HTMLElement):
   const originalCssText = selectedEl.style.cssText;
   const existingTransform = getComputedStyle(selectedEl).transform;
 
+  // If the element has Tailwind translate classes from a previous commit,
+  // the computed transform matrix includes their effect. Clear it to avoid
+  // doubling: the batch engine manages translate via classes, not inline styles.
+  const hasTailwindTranslate = /(?:^|\s)-?translate-[xy]/.test(selectedEl.className ?? "");
+
   // Capture fiber key for list item disambiguation
   const hostFiber = getFiberFromHostInstance(selectedEl);
   const jsxKey = hostFiber?.key != null ? String(hostFiber.key) : undefined;
@@ -72,7 +77,7 @@ export function tryStartMove(clientX: number, clientY: number, el: HTMLElement):
     originalRect,
     delta: { dx: 0, dy: 0 },
     originalCssText,
-    existingTransform: existingTransform === "none" ? "" : existingTransform,
+    existingTransform: (!hasTailwindTranslate && existingTransform !== "none") ? existingTransform : "",
     identity: {
       componentName: selection.componentName,
       filePath: selection.filePath,

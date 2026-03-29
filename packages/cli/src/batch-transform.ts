@@ -460,11 +460,32 @@ function applyOp(j: any, root: any, rop: ResolvedOp, source: string): string | u
 
       // Default: CSS translate class
       const basePrefix = op.axis === "x" ? "translate-x" : "translate-y";
-      const isNegative = op.direction === "negative";
       const classPattern = `^-?${basePrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(-|$)`;
+      const classPatternRe = new RegExp(classPattern);
+
+      // Read existing translate class to accumulate rather than replace
+      const existingClasses = getJSXStaticClasses(node.node);
+      let existingPx = 0;
+      for (const cls of existingClasses) {
+        if (classPatternRe.test(cls)) {
+          existingPx = parseTranslateClassPx(cls, basePrefix);
+          break;
+        }
+      }
+
+      const totalPx = existingPx + op.pxDelta;
+
+      // If net movement is ~0, remove the translate class entirely
+      if (Math.abs(totalPx) < 0.5) {
+        removeClassByPattern(node, classPatternRe);
+        return undefined;
+      }
+
+      const isNegative = totalPx < 0;
+      const token = snapPxToSpacingToken(Math.abs(totalPx));
       const updates: ClassNameUpdate[] = [{
         tailwindPrefix: isNegative ? `-${basePrefix}` : basePrefix,
-        tailwindToken: op.token,
+        tailwindToken: token,
         value: "",
         classPattern,
       }];
@@ -477,6 +498,117 @@ function applyOp(j: any, root: any, rop: ResolvedOp, source: string): string | u
       return `Unknown operation type: ${_exhaustive}`;
     }
   }
+}
+
+// ── Tailwind spacing scale helpers ──────────────────────────────────────
+
+/**
+ * Remove all classes matching a regex pattern from a JSX element's className.
+ * Handles StringLiteral, Literal, TemplateLiteral, and CallExpression className forms.
+ */
+function removeClassByPattern(nodePath: any, pattern: RegExp): void {
+  const openingElement = nodePath.node.openingElement;
+  const attrs = openingElement?.attributes ?? [];
+  const classNameAttr = attrs.find(
+    (a: any) => a.type === "JSXAttribute" && a.name?.name === "className"
+  );
+  if (!classNameAttr?.value) return;
+
+  const val = classNameAttr.value;
+
+  const removeFromStr = (s: string) =>
+    s.split(/\s+/).filter((c: string) => c && !pattern.test(c)).join(" ");
+
+  if (val.type === "StringLiteral" || val.type === "Literal") {
+    val.value = removeFromStr(val.value);
+    return;
+  }
+  if (val.type === "JSXExpressionContainer") {
+    const expr = val.expression;
+    if (expr.type === "TemplateLiteral") {
+      for (const quasi of expr.quasis ?? []) {
+        const raw = quasi.value.raw;
+        const leadingWs = raw.match(/^(\s*)/)?.[1] ?? "";
+        const trailingWs = raw.match(/(\s*)$/)?.[1] ?? "";
+        const cleaned = removeFromStr(raw.trim());
+        quasi.value = { raw: `${leadingWs}${cleaned}${trailingWs}`, cooked: `${leadingWs}${cleaned}${trailingWs}` };
+      }
+      return;
+    }
+    if (expr.type === "CallExpression") {
+      for (const arg of expr.arguments ?? []) {
+        if (arg.type === "StringLiteral" || arg.type === "Literal") {
+          arg.value = removeFromStr(arg.value ?? "");
+        }
+      }
+    }
+  }
+}
+
+/** Default Tailwind spacing scale: token → px. Used by the batch engine to
+ *  read back existing translate classes and accumulate deltas. */
+const SPACING_TOKEN_PX: Record<string, number> = {
+  "0": 0, "px": 1, "0.5": 2, "1": 4, "1.5": 6, "2": 8, "2.5": 10,
+  "3": 12, "3.5": 14, "4": 16, "5": 20, "6": 24, "7": 28, "8": 32,
+  "9": 36, "10": 40, "11": 44, "12": 48, "14": 56, "16": 64,
+  "20": 80, "24": 96, "28": 112, "32": 128, "36": 144, "40": 160,
+  "44": 176, "48": 192, "52": 208, "56": 224, "60": 240, "64": 256,
+  "72": 288, "80": 320, "96": 384,
+};
+
+/** Reverse map: px → token for re-snapping. */
+const PX_SPACING_TOKEN: Record<number, string> = {};
+for (const [token, px] of Object.entries(SPACING_TOKEN_PX)) {
+  PX_SPACING_TOKEN[px] = token;
+}
+
+/**
+ * Parse a Tailwind translate class (e.g., "translate-x-6", "-translate-y-4", "translate-x-[32px]")
+ * back to a signed pixel value.
+ */
+function parseTranslateClassPx(cls: string, basePrefix: string): number {
+  const isNeg = cls.startsWith("-");
+  // Strip leading "-" and the prefix + "-" to get the token
+  const stripped = isNeg ? cls.slice(1) : cls;
+  const token = stripped.slice(basePrefix.length + 1); // +1 for the "-" separator
+
+  // Arbitrary value: [Npx]
+  const arbMatch = token.match(/^\[(-?\d+(?:\.\d+)?)px\]$/);
+  if (arbMatch) {
+    return (isNeg ? -1 : 1) * parseFloat(arbMatch[1]);
+  }
+
+  // Standard token
+  const px = SPACING_TOKEN_PX[token];
+  if (px != null) {
+    return (isNeg ? -1 : 1) * px;
+  }
+
+  return 0; // unknown token, treat as 0
+}
+
+/**
+ * Snap an absolute pixel value to the nearest Tailwind spacing token.
+ * Returns the token name (e.g., "6") or an arbitrary value (e.g., "[32px]").
+ */
+function snapPxToSpacingToken(absPx: number): string {
+  let bestToken: string | null = null;
+  let bestDist = Infinity;
+
+  for (const [token, tokenPx] of Object.entries(SPACING_TOKEN_PX)) {
+    const dist = Math.abs(absPx - tokenPx);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestToken = token;
+    }
+  }
+
+  // Accept if within 15% relative threshold (max 8px)
+  if (bestToken !== null && bestDist <= Math.min(absPx * 0.15, 8)) {
+    return bestToken;
+  }
+
+  return `[${Math.round(absPx)}px]`;
 }
 
 // ── Move mechanism detection ─────────────────────────────────────────────

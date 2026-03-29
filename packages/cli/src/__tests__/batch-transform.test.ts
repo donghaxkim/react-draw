@@ -208,7 +208,7 @@ describe("executeBatch", () => {
 
     const result = executeBatch(
       [{ op: "moveSpacing", file: filePath, line: h2Pos.line, col: h2Pos.col,
-         axis: "y", token: "4", direction: "positive", layoutContext: "block" }],
+         axis: "y", token: "4", pxDelta: 16, direction: "positive", layoutContext: "block" }],
       path.dirname(filePath),
     );
 
@@ -224,7 +224,7 @@ describe("executeBatch", () => {
 
     const result = executeBatch(
       [{ op: "moveSpacing", file: filePath, line: h2Pos.line, col: h2Pos.col,
-         axis: "x", token: "8", direction: "negative", layoutContext: "positioned" }],
+         axis: "x", token: "8", pxDelta: -32, direction: "negative", layoutContext: "positioned" }],
       path.dirname(filePath),
     );
 
@@ -232,6 +232,91 @@ describe("executeBatch", () => {
 
     const updated = fs.readFileSync(filePath, "utf-8");
     expect(updated).toContain("-translate-x-8");
+  });
+
+  it("accumulates moveSpacing across sequential applies (same axis)", () => {
+    const { filePath, original } = setup("classname-string.tsx");
+    const h2Pos = findPosition(original, "h2");
+
+    // First apply: translate-x-6 (24px)
+    const result1 = executeBatch(
+      [{ op: "moveSpacing", file: filePath, line: h2Pos.line, col: h2Pos.col,
+         axis: "x", token: "6", pxDelta: 24, direction: "positive", layoutContext: "block" }],
+      path.dirname(filePath),
+    );
+    expect(result1.results[0].success).toBe(true);
+
+    // Re-read and re-parse positions for second apply
+    const after1 = fs.readFileSync(filePath, "utf-8");
+    const h2Pos2 = findPosition(after1, "h2");
+
+    // Second apply: +translate-x-4 (16px) → total 40px = translate-x-10
+    const result2 = executeBatch(
+      [{ op: "moveSpacing", file: filePath, line: h2Pos2.line, col: h2Pos2.col,
+         axis: "x", token: "4", pxDelta: 16, direction: "positive", layoutContext: "block" }],
+      path.dirname(filePath),
+    );
+    expect(result2.results[0].success).toBe(true);
+
+    const final = fs.readFileSync(filePath, "utf-8");
+    expect(final).toContain("translate-x-10");
+    expect(final).not.toContain("translate-x-4");
+  });
+
+  it("removes translate class when net movement is zero", () => {
+    const { filePath, original } = setup("classname-string.tsx");
+    const h2Pos = findPosition(original, "h2");
+
+    // First apply: translate-x-6 (24px positive)
+    const result1 = executeBatch(
+      [{ op: "moveSpacing", file: filePath, line: h2Pos.line, col: h2Pos.col,
+         axis: "x", token: "6", pxDelta: 24, direction: "positive", layoutContext: "block" }],
+      path.dirname(filePath),
+    );
+    expect(result1.results[0].success).toBe(true);
+
+    // Re-read and re-parse positions for second apply
+    const after1 = fs.readFileSync(filePath, "utf-8");
+    const h2Pos2 = findPosition(after1, "h2");
+
+    // Second apply: -24px to cancel out → net zero
+    const result2 = executeBatch(
+      [{ op: "moveSpacing", file: filePath, line: h2Pos2.line, col: h2Pos2.col,
+         axis: "x", token: "6", pxDelta: -24, direction: "negative", layoutContext: "block" }],
+      path.dirname(filePath),
+    );
+    expect(result2.results[0].success).toBe(true);
+
+    const final = fs.readFileSync(filePath, "utf-8");
+    expect(final).not.toMatch(/translate-x/);
+  });
+
+  it("accumulates negative moveSpacing correctly", () => {
+    const { filePath, original } = setup("classname-string.tsx");
+    const h2Pos = findPosition(original, "h2");
+
+    // First apply: -translate-y-4 (-16px)
+    const result1 = executeBatch(
+      [{ op: "moveSpacing", file: filePath, line: h2Pos.line, col: h2Pos.col,
+         axis: "y", token: "4", pxDelta: -16, direction: "negative", layoutContext: "block" }],
+      path.dirname(filePath),
+    );
+    expect(result1.results[0].success).toBe(true);
+
+    // Re-read and re-parse positions for second apply
+    const after1 = fs.readFileSync(filePath, "utf-8");
+    const h2Pos2 = findPosition(after1, "h2");
+
+    // Second apply: -translate-y-2 (-8px) → total -24px = -translate-y-6
+    const result2 = executeBatch(
+      [{ op: "moveSpacing", file: filePath, line: h2Pos2.line, col: h2Pos2.col,
+         axis: "y", token: "2", pxDelta: -8, direction: "negative", layoutContext: "block" }],
+      path.dirname(filePath),
+    );
+    expect(result2.results[0].success).toBe(true);
+
+    const final = fs.readFileSync(filePath, "utf-8");
+    expect(final).toContain("-translate-y-6");
   });
 
   // ── Error handling ───────────────────────────────────────────────────

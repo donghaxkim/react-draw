@@ -217,7 +217,7 @@ describe("element-resolution: deterministic chain", () => {
     const result = executeBatch(
       [{
         op: "moveSpacing", file: filePath, line: 2, col: 9,
-        axis: "y", token: "8", direction: "positive", layoutContext: "block",
+        axis: "y", token: "8", pxDelta: 48, direction: "positive", layoutContext: "block",
       }],
       path.dirname(filePath),
     );
@@ -235,7 +235,7 @@ describe("element-resolution: deterministic chain", () => {
     const result = executeBatch(
       [{
         op: "moveSpacing", file: filePath, line: 2, col: 9,
-        axis: "y", token: "8", direction: "negative", layoutContext: "block",
+        axis: "y", token: "8", pxDelta: -48, direction: "negative", layoutContext: "block",
       }],
       path.dirname(filePath),
     );

@@ -597,6 +597,7 @@ export function buildBatchOperations(): BatchOperation[] {
         axis: "x",
         token: snapToSpacingToken(entry.delta.dx),
         direction: entry.delta.dx > 0 ? "positive" : "negative",
+        pxDelta: Math.round(entry.delta.dx),
         layoutContext: layout,
       });
     }
@@ -611,6 +612,7 @@ export function buildBatchOperations(): BatchOperation[] {
         axis: "y",
         token: snapToSpacingToken(entry.delta.dy),
         direction: entry.delta.dy > 0 ? "positive" : "negative",
+        pxDelta: Math.round(entry.delta.dy),
         layoutContext: layout,
       });
     }
