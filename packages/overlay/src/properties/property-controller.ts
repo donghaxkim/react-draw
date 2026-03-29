@@ -127,14 +127,16 @@ let cleanupCommitListener: (() => void) | null = null;
 // HMR survival observer
 // ---------------------------------------------------------------------------
 
-const observer = new MutationObserver(() => {
-  if (state.selectedElement && !document.contains(state.selectedElement)) {
-    clearTimeout(reacquireTimer);
-    reacquireTimer = setTimeout(() => {
-      reacquireElement();
-    }, 80);
-  }
-});
+const observer = typeof MutationObserver !== "undefined"
+  ? new MutationObserver(() => {
+      if (state.selectedElement && !document.contains(state.selectedElement)) {
+        clearTimeout(reacquireTimer);
+        reacquireTimer = setTimeout(() => {
+          reacquireElement();
+        }, 80);
+      }
+    })
+  : null;
 
 /**
  * After HMR replaces the DOM, find the new element matching the stored
@@ -728,8 +730,8 @@ export function inspect(element: HTMLElement, info: ComponentInfo): void {
   controls = newControls;
 
   // Reconnect observer scoped to selected element's parent
-  observer.disconnect();
-  observer.observe(element.parentElement || document.body, { childList: true, subtree: true });
+  observer?.disconnect();
+  observer?.observe(element.parentElement || document.body, { childList: true, subtree: true });
 
   // Show sidebar
   sidebar.show(info.componentName, info.filePath, info.lineNumber, container);
@@ -895,7 +897,7 @@ export function cancel(): void {
  */
 export function deselect(): void {
   if (commitTimer) { clearTimeout(commitTimer); commitTimer = null; }
-  observer.disconnect();
+  observer?.disconnect();
   cancel();
   destroyControls();
   if (sidebar) {
@@ -910,7 +912,7 @@ export function deselect(): void {
  */
 export function commitAndDeselect(): void {
   if (commitTimer) { clearTimeout(commitTimer); commitTimer = null; }
-  observer.disconnect();
+  observer?.disconnect();
   commit();
   destroyControls();
   if (sidebar) {
