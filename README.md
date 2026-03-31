@@ -4,6 +4,9 @@
 
 It is built for local development and works by opening a proxy in front of your dev server and injecting an overlay into the page.
 
+## Demo
+https://youtu.be/APl0_v5CRnI
+
 ## Fastest path
 
 You do not need to download or clone this repo.
