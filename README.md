@@ -5,6 +5,9 @@
 It is built for local development and works by opening a proxy in front of your dev server and injecting an overlay into the page.
 
 ## Demo
+![React Rewrite GIF Converter](https://github.com/user-attachments/assets/098e564b-d9a9-411d-8ba0-5cf6109bc2e4)
+
+full demo:
 https://youtu.be/APl0_v5CRnI
 
 ## Fastest path
