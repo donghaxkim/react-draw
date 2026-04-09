@@ -654,7 +654,22 @@ export async function selectElement(el: HTMLElement, options?: { skipSidebar?: b
     showSelectionOverlay(displayRect, null);
     hideHoverOverlay();
 
-    const resolved = (await resolveComponentFromElement(el)) ?? buildFallbackSelection(el);
+    // Check if this is a palette-inserted element — use synthetic info from palette state
+    let resolved: ResolvedComponent;
+    const paletteAttr = el.closest("[data-react-rewrite-palette-insert]");
+    if (paletteAttr) {
+      const paletteEl = paletteAttr as HTMLElement;
+      resolved = {
+        tagName: el.tagName.toLowerCase(),
+        componentName: paletteEl.getAttribute("data-palette-component") ?? el.tagName.toLowerCase(),
+        filePath: paletteEl.getAttribute("data-palette-file") ?? "",
+        lineNumber: 0,
+        columnNumber: 0,
+        stack: [],
+      };
+    } else {
+      resolved = (await resolveComponentFromElement(el)) ?? buildFallbackSelection(el);
+    }
 
     // Layer 2: grep-based discovery when filePath is empty
     if (!resolved.filePath && resolved.componentName) {

@@ -1,5 +1,5 @@
 // packages/overlay/src/index.ts
-import { connect, disconnect, send, onMessage } from "./bridge.js";
+import { connect, disconnect, send, onMessage, requestFileDiscovery } from "./bridge.js";
 import { mountToolbar, destroyToolbar, setOnGenerate, setOnCanvasUndo, updateGenerateButton, showToast, getShadowRoot } from "./toolbar.js";
 import { initSelection, deactivateSelection, clearSelection, setEnabled, getSelection, getSelectedElement } from "./selection.js";
 import { initHighlightCanvas, destroyHighlightCanvas } from "./highlight-canvas.js";
@@ -207,20 +207,51 @@ function init(): void {
   let palette: ReturnType<typeof createPalettePanel> | null = null;
   if (shadowRoot) {
     palette = createPalettePanel(shadowRoot, {
-      onInsert: (item, variant) => {
+      onInsert: async (item, variant) => {
         const position = palette!.getInsertPosition();
         const selectedEl = getSelectedElement();
         const componentInfo = getSelection();
         const targetElement = selectedEl ?? document.querySelector("main") ?? document.body;
+
+        // Resolve file path — use selection info, or discover from the target element's component
+        let filePath = componentInfo?.filePath ?? "";
+        let line = componentInfo?.lineNumber ?? 0;
+        let col = componentInfo?.columnNumber ?? 0;
+
+        if (!filePath) {
+          // Try to resolve from the target element's parent component
+          const targetComponentName = (targetElement as HTMLElement).tagName?.toLowerCase() === "main"
+            ? "Page" : (targetElement as HTMLElement).dataset?.reactRewriteComponent;
+          if (targetComponentName) {
+            const discovered = await requestFileDiscovery(targetComponentName);
+            if (discovered) filePath = discovered;
+          }
+          // If still no file path, try common page file names
+          if (!filePath) {
+            const discovered = await requestFileDiscovery("Page")
+              ?? await requestFileDiscovery("Home")
+              ?? await requestFileDiscovery("App");
+            if (discovered) filePath = discovered;
+          }
+          // Last resort: use the first stack frame from any element on the page
+          if (!filePath) {
+            const anyElement = document.querySelector("[data-reactroot]") ?? document.querySelector("#__next") ?? document.querySelector("#root");
+            if (anyElement) {
+              const fiber = (window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__?.getFiberFromHostInstance?.(anyElement);
+              if (fiber?._debugSource) {
+                filePath = fiber._debugSource.fileName ?? "";
+                line = fiber._debugSource.lineNumber ?? 0;
+                col = fiber._debugSource.columnNumber ?? 0;
+              }
+            }
+          }
+        }
+
         stageComponentInsertion(
           { name: item.name, displayName: item.name, description: "", category: item.category, type: item.type, dependencies: [], registryDependencies: [] },
           targetElement as HTMLElement,
           position,
-          {
-            filePath: componentInfo?.filePath ?? "",
-            line: componentInfo?.lineNumber ?? 0,
-            col: componentInfo?.columnNumber ?? 0,
-          },
+          { filePath, line, col },
           variant,
         );
       },

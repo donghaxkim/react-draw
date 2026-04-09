@@ -535,6 +535,7 @@ export function stageComponentInsertion(
   // Create a real-looking preview element
   const element = createPreviewElement(item.name, variant?.props);
   element.setAttribute("data-react-rewrite-palette-insert", "true");
+  element.setAttribute("data-palette-component", componentName);
 
   // Insert into DOM
   if (position === "inside") {
