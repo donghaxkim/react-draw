@@ -14,6 +14,7 @@ import {
   type ClassNameUpdate,
 } from "./transform.js";
 import { applyMdxTextEdit, isMdxTextFile } from "./mdx-text.js";
+import { applyInsertComponent } from "./insert-transform.js";
 import { resolveProjectFilePath, isProjectFilePathSafe } from "./path-resolver.js";
 import { resolveJSXPath } from "./jsx-path-resolver.js";
 import { logger } from "./logger.js";
@@ -589,6 +590,11 @@ function applyOp(j: any, root: any, rop: ResolvedOp, source: string): string | u
 
     case "duplicateElement": {
       // Handled in Phase 0 of executeBatch (source-level splice).
+      return undefined;
+    }
+
+    case "insertComponent": {
+      // Handled in a separate phase before other ops
       return undefined;
     }
 
@@ -1408,9 +1414,51 @@ export function executeBatch(
       continue;
     }
 
+    // Phase: insertComponent operations (own parse pass, like duplicates)
+    const insertOps = ops.filter(o => o.op.op === "insertComponent");
+    const nonInsertOps = ops.filter(o => o.op.op !== "insertComponent");
+
+    if (insertOps.length > 0) {
+      for (const { index, op } of insertOps) {
+        if (op.op !== "insertComponent") continue;
+        const line = op.line;
+        try {
+          const result = applyInsertComponent(resolvedPath, {
+            line: op.line,
+            col: op.col,
+            position: op.position,
+            componentName: op.componentName,
+            importPath: op.importPath,
+            importNames: op.importNames,
+            jsxString: op.jsxString,
+          });
+          if (result.success) {
+            results[index] = { op: op.op, file, line, success: true };
+            if (result.afterContent) {
+              undoEntries.push({ filePath: resolvedPath, content: result.beforeContent, afterContent: result.afterContent });
+            }
+          } else {
+            results[index] = { op: op.op, file, line, success: false, error: result.error ?? "Unknown error" };
+          }
+        } catch (err) {
+          results[index] = {
+            op: op.op, file, line,
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      }
+
+      // Re-read source after inserts for subsequent phases
+      source = fs.readFileSync(resolvedPath, "utf-8");
+
+      if (nonInsertOps.length === 0) continue;
+    }
+
     // Phase 0: Apply duplicateElement splices BEFORE parsing for other ops.
-    const duplicateOps = ops.filter(o => o.op.op === "duplicateElement");
-    const nonDuplicateOps = ops.filter(o => o.op.op !== "duplicateElement");
+    // nonInsertOps is either all ops (no inserts) or the remaining ops after insert phase.
+    const duplicateOps = nonInsertOps.filter(o => o.op.op === "duplicateElement");
+    const nonDuplicateOps = nonInsertOps.filter(o => o.op.op !== "duplicateElement");
 
     if (duplicateOps.length > 0) {
       const { j: jDup, root: rootDup } = parseSource(source, resolvedPath);
@@ -1469,7 +1517,7 @@ export function executeBatch(
     const { j, root, quoteStyle } = parseSource(source, resolvedPath);
 
     // Phase 1: Resolve all nodes against the (potentially modified) AST
-    const resolved = resolveNodes(j, root, nonDuplicateOps.length > 0 ? nonDuplicateOps : ops, resolvedPath);
+    const resolved = resolveNodes(j, root, nonDuplicateOps.length > 0 ? nonDuplicateOps : nonInsertOps, resolvedPath);
 
     // Phase 2: Coalesce same-node operations
     const coalesced = coalesceOps(resolved);

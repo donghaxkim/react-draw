@@ -736,4 +736,34 @@ attention isn't some scary, complex, rocket science concept. to explain it simpl
     const updated = fs.readFileSync(filePath, "utf-8");
     expect(updated).toContain("text-purple-500");
   });
+
+  describe("executeBatch — insertComponent", () => {
+    it("inserts a component via batch operation", () => {
+      const { filePath, original } = setup("insert-target.tsx");
+      const pos = findPosition(original, "main");
+
+      const result = executeBatch(
+        [{
+          op: "insertComponent",
+          file: filePath,
+          line: pos.line,
+          col: pos.col,
+          position: "inside" as const,
+          componentName: "Button",
+          importPath: "@/components/ui/button",
+          importNames: ["Button"],
+          jsxString: "<Button>Click me</Button>",
+          registryName: "button",
+        }],
+        path.dirname(filePath),
+      );
+
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].success).toBe(true);
+
+      const updated = fs.readFileSync(filePath, "utf-8");
+      expect(updated).toContain("<Button>Click me</Button>");
+      expect(updated).toContain('import { Button } from "@/components/ui/button"');
+    });
+  });
 });
