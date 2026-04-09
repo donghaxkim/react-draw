@@ -11,6 +11,7 @@ import type {
   TransformErrorCode,
   TailwindTokenMap,
 } from "@react-rewrite/shared";
+import type { RegistryItem, RegistryItemFull, ProjectConfig } from "@react-rewrite/shared";
 import { reorderComponent, getSiblings } from "./transform.js";
 import { updateClassName, updateTextContent } from "./transform.js";
 import { logger } from "./logger.js";
@@ -18,6 +19,9 @@ import { resolveTailwindConfig } from "./tailwind-resolver.js";
 import { isProjectFilePathSafe, resolveProjectFilePath } from "./path-resolver.js";
 import { discoverFile } from "./file-discovery.js";
 import { executeBatch } from "./batch-transform.js";
+import { ShadcnProvider } from "./registry/shadcn-provider.js";
+import { getCacheDir, writeCachedIndex, writeCachedItem, readCachedIndex, readCachedItem, isCacheStale } from "./registry/registry-cache.js";
+import { writeComponentFiles } from "./registry/component-writer.js";
 
 interface SketchServerOptions {
   port: number;
@@ -51,6 +55,44 @@ export function attachUndoIdsToBatchResults(
   });
 }
 
+function detectProjectConfig(projectRoot: string): ProjectConfig {
+  const hasTsConfig = fs.existsSync(path.join(projectRoot, "tsconfig.json"));
+
+  let pathAlias: string | null = null;
+  if (hasTsConfig) {
+    try {
+      const tsConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, "tsconfig.json"), "utf-8"));
+      const paths = tsConfig.compilerOptions?.paths ?? {};
+      for (const [alias] of Object.entries(paths)) {
+        if (alias.endsWith("/*")) {
+          pathAlias = alias.replace("/*", "/");
+          break;
+        }
+      }
+    } catch {}
+  }
+
+  let componentDir = path.join(projectRoot, "src", "components", "ui");
+  const componentsJson = path.join(projectRoot, "components.json");
+  if (fs.existsSync(componentsJson)) {
+    try {
+      const config = JSON.parse(fs.readFileSync(componentsJson, "utf-8"));
+      if (config.aliases?.components) {
+        const alias = config.aliases.components.replace(/^@\//, "src/");
+        componentDir = path.join(projectRoot, alias, "ui");
+      }
+    } catch {}
+  } else if (!fs.existsSync(path.join(projectRoot, "src"))) {
+    componentDir = path.join(projectRoot, "components", "ui");
+  }
+
+  let packageManager: "pnpm" | "npm" | "yarn" = "npm";
+  if (fs.existsSync(path.join(projectRoot, "pnpm-lock.yaml"))) packageManager = "pnpm";
+  else if (fs.existsSync(path.join(projectRoot, "yarn.lock"))) packageManager = "yarn";
+
+  return { componentDir, isTypeScript: hasTsConfig, pathAlias, packageManager, projectRoot };
+}
+
 export function createSketchServer(portOrOptions: number | SketchServerOptions): SketchServer {
   const port = typeof portOrOptions === "number" ? portOrOptions : portOrOptions.port;
   const wss = new WebSocketServer({ port });
@@ -59,6 +101,50 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
   let activeClient: WebSocket | null = null;
   let processing = false;
   const queue: Array<{ msg: ClientMessage; ws: WebSocket }> = [];
+
+  const shadcnProvider = new ShadcnProvider();
+  let registryIndex: RegistryItem[] = [];
+  let registryReady = false;
+  let registryItemCache: Map<string, RegistryItemFull> = new Map();
+
+  async function prefetchRegistry(projectRoot: string): Promise<void> {
+    const cacheDir = getCacheDir(projectRoot);
+
+    const cachedIndex = readCachedIndex(cacheDir);
+    if (cachedIndex && !isCacheStale(cacheDir)) {
+      registryIndex = cachedIndex;
+      for (const item of cachedIndex) {
+        const cached = readCachedItem(cacheDir, item.type, item.name);
+        if (cached) registryItemCache.set(item.name, cached);
+      }
+      registryReady = true;
+      logger.info(`[Registry] Loaded ${registryItemCache.size} items from cache`);
+      return;
+    }
+
+    logger.info("[Registry] Prefetching shadcn registry...");
+    try {
+      const items = await shadcnProvider.fetchAll((fetched, total) => {
+        // Broadcast progress to connected clients
+        for (const client of wss.clients) {
+          if (client.readyState === 1) { // WebSocket.OPEN
+            client.send(JSON.stringify({ type: "registryPrefetchProgress", fetched, total }));
+          }
+        }
+      });
+
+      registryIndex = items.map(({ files, ...rest }) => rest);
+      for (const item of items) {
+        registryItemCache.set(item.name, item);
+        writeCachedItem(cacheDir, item.type, item);
+      }
+      writeCachedIndex(cacheDir, registryIndex);
+      registryReady = true;
+      logger.info(`[Registry] Prefetched ${items.length} items`);
+    } catch (err) {
+      logger.error("[Registry] Prefetch failed:", err instanceof Error ? err.message : String(err));
+    }
+  }
 
   function extractErrorCode(err: unknown): TransformErrorCode | undefined {
     if (err instanceof Error) {
@@ -257,6 +343,28 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
         case "commitBatch": {
           logger.info(`[commitBatch] Received ${msg.operations.length} operations:`, msg.operations.map((o: BatchOperation) => `${o.op}@${o.file}:${o.op === "reorder" ? o.fromLine : o.line}`));
           try {
+            // Pre-commit: write component files for insertComponent operations
+            const insertOps = (msg.operations as BatchOperation[]).filter(
+              (op): op is Extract<BatchOperation, { op: "insertComponent" }> => op.op === "insertComponent"
+            );
+            if (insertOps.length > 0) {
+              const projectConfig = detectProjectConfig(projectRoot);
+              for (const op of insertOps) {
+                const item = registryItemCache.get(op.registryName);
+                if (item) {
+                  try {
+                    writeComponentFiles(item, projectConfig);
+                    for (const dep of item.registryDependencies) {
+                      const depItem = registryItemCache.get(dep);
+                      if (depItem) writeComponentFiles(depItem, projectConfig);
+                    }
+                  } catch (err) {
+                    logger.error(`[commitBatch] Failed to write component files for ${op.registryName}:`, err);
+                  }
+                }
+              }
+            }
+
             const batchResult = executeBatch(msg.operations, projectRoot);
             const failedOps = batchResult.results.filter(r => !r.success);
             if (failedOps.length > 0) {
@@ -434,6 +542,13 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
           break;
         }
 
+        case "getComponentRegistry": {
+          const components = registryIndex.filter(i => i.type === "component");
+          const blocks = registryIndex.filter(i => i.type === "block");
+          send(ws, { type: "componentRegistry", components, blocks });
+          break;
+        }
+
         case "fileStat": {
           if (!isProjectFilePathSafe(msg.filePath, projectRoot)) {
             send(ws, { type: "fileStatResult", filePath: msg.filePath, mtime: 0, size: 0 });
@@ -479,6 +594,11 @@ export function createSketchServer(portOrOptions: number | SketchServerOptions):
         queue.length = 0;
       }
     });
+  });
+
+  // Prefetch registry in the background after server starts
+  prefetchRegistry(projectRoot).catch((err) => {
+    logger.error("[Registry] Prefetch startup error:", err);
   });
 
   return {
