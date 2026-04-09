@@ -8,6 +8,7 @@ import type { MergedTokenMap } from "./tailwind-resolver.js";
 import { send, onMessage, requestFileDiscovery } from "../bridge.js";
 import { getCachedFilePath, setCachedFilePath } from "../file-discovery-cache.js";
 import { addChangeEntry } from "../changelog.js";
+import { isPaletteInsert } from "../palette/palette-mount.js";
 import { showToast } from "../toolbar.js";
 import type { PropertyControl } from "./controls/types.js";
 import { addPendingPropertyOperation, pushUndoAction, type PropertyChangeRuntime } from "../canvas-state.js";
@@ -811,10 +812,24 @@ export function commit(): void {
   if (state.pendingBatch.size === 0) return;
   if (!state.componentInfo) return;
 
+  const el = state.selectedElement;
+
+  // For palette-inserted elements: apply changes directly to the DOM.
+  // The inline style previews are already visible. Don't send to server
+  // (no source file exists yet). Changes are captured in the palette state
+  // and written to JSX when the user clicks Confirm.
+  if (el && isPaletteInsert(el)) {
+    // Update originalValues so next change is relative
+    for (const [key, update] of state.pendingBatch) {
+      state.originalValues.set(key, update.value);
+    }
+    state.pendingBatch.clear();
+    return;
+  }
+
   const filePath = state.componentInfo.filePath || "";
   const lineNumber = state.componentInfo.lineNumber;
   const columnNumber = state.componentInfo.columnNumber - 1;
-  const el = state.selectedElement;
 
   // Build the batch operation with identity hints for React 19 resolution
   const updates = [...state.pendingBatch.values()].map(u => {
